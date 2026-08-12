@@ -1041,98 +1041,25 @@ func (g *GitVault) RenameAsset(ctx context.Context, oldName, newName string) err
 	return nil
 }
 
-// ListAssets returns a list of all assets in the vault by reading the assets/ directory
+// ListAssets lists the vault's assets — stored under assets/ or declared
+// in the manifest. See listFileVaultAssets.
 func (g *GitVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*ListAssetsResult, error) {
 	start := time.Now()
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
 		return nil, fmt.Errorf("failed to clone/update repository: %w", err)
 	}
-	log := logger.Get()
-	log.Debug("cloneOrUpdate completed", "duration", time.Since(start))
+	logger.Get().Debug("cloneOrUpdate completed", "duration", time.Since(start))
 
 	l, err := detectLayout(g.repoPath)
 	if err != nil {
 		return nil, err
 	}
-
-	// Read assets/ directory
-	assetsDir := filepath.Join(g.repoPath, l.AssetsRoot())
-	entries, err := os.ReadDir(assetsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// No assets directory means no assets
-			return &ListAssetsResult{Assets: []AssetSummary{}}, nil
-		}
-		return nil, fmt.Errorf("failed to read assets directory: %w", err)
-	}
-
-	var assets []AssetSummary
-	for _, entry := range filterScanEntries(entries) {
-		if !entry.IsDir() {
-			continue
-		}
-
-		// Read list.txt for versions
-		versions, err := g.GetVersionList(ctx, entry.Name())
-		if err != nil || len(versions) == 0 {
-			continue // Skip if no versions
-		}
-
-		// Get metadata for latest version
-		latestVersion := versions[len(versions)-1]
-		metadataPath := filepath.Join(g.repoPath, l.MetadataPath(entry.Name(), latestVersion))
-
-		assetSummary := AssetSummary{
-			Name:          entry.Name(),
-			LatestVersion: latestVersion,
-			VersionsCount: len(versions),
-		}
-
-		// Try to read metadata
-		if metaData, err := os.ReadFile(metadataPath); err == nil {
-			if meta, err := metadata.Parse(metaData); err == nil {
-				assetSummary.Type = meta.Asset.Type
-				assetSummary.Description = meta.Asset.Description
-			}
-		}
-		// Get file timestamps
-		assetDirInfo, _ := entry.Info()
-		if assetDirInfo != nil {
-			assetSummary.CreatedAt = assetDirInfo.ModTime()
-			assetSummary.UpdatedAt = assetDirInfo.ModTime()
-		}
-
-		// Apply type filter if specified
-		if opts.Type != "" && assetSummary.Type.Key != opts.Type {
-			continue
-		}
-
-		// AFTER the type filter: this fallback reads files, and a
-		// filtered listing must not pay it for assets it discards.
-		if assetSummary.Description == "" {
-			// Assets published without a metadata description usually
-			// still declare one in markdown frontmatter — show it.
-			assetSummary.Description = markdownDescription(
-				filepath.Join(g.repoPath, l.VersionDir(entry.Name(), latestVersion)))
-		}
-
-		assets = append(assets, assetSummary)
-	}
-
-	if search := strings.TrimSpace(opts.Search); search != "" {
-		assets = filterBySearch(assets, search)
-	}
-
-	// Apply limit if specified
-	if opts.Limit > 0 && len(assets) > opts.Limit {
-		assets = assets[:opts.Limit]
-	}
-
-	return &ListAssetsResult{Assets: assets}, nil
+	return listFileVaultAssets(g.repoPath, l, opts)
 }
 
-// GetAssetDetails returns detailed information about a specific asset
+// GetAssetDetails returns detailed information about a specific asset —
+// stored under assets/ or declared in the manifest. See fileVaultAssetDetails.
 func (g *GitVault) GetAssetDetails(ctx context.Context, name string) (*AssetDetails, error) {
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
@@ -1143,77 +1070,7 @@ func (g *GitVault) GetAssetDetails(ctx context.Context, name string) (*AssetDeta
 	if err != nil {
 		return nil, err
 	}
-
-	// Check if asset directory exists
-	assetDir := filepath.Join(g.repoPath, l.AssetDir(name))
-	if _, err := os.Stat(assetDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("asset '%s' not found", name)
-	}
-
-	// Get version list
-	versions, err := g.GetVersionList(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get version list: %w", err)
-	}
-
-	if len(versions) == 0 {
-		return nil, fmt.Errorf("asset '%s' has no versions", name)
-	}
-
-	// Build version list with file info
-	var versionList []AssetVersion
-	for _, v := range versions {
-		versionDir := filepath.Join(g.repoPath, l.VersionDir(name, v))
-		versionInfo, err := os.Stat(versionDir)
-
-		versionEntry := AssetVersion{Version: v}
-		if err == nil {
-			versionEntry.CreatedAt = versionInfo.ModTime()
-
-			// Count files in version directory
-			if entries, err := os.ReadDir(versionDir); err == nil {
-				fileCount := 0
-				for _, e := range entries {
-					if !e.IsDir() {
-						fileCount++
-					}
-				}
-				versionEntry.FilesCount = fileCount
-			}
-		}
-
-		versionList = append(versionList, versionEntry)
-	}
-
-	// Get metadata for latest version
-	latestVersion := versions[len(versions)-1]
-	metadataPath := filepath.Join(g.repoPath, l.MetadataPath(name, latestVersion))
-
-	details := &AssetDetails{
-		Name:     name,
-		Versions: versionList,
-	}
-
-	// Try to read metadata
-	if metaData, err := os.ReadFile(metadataPath); err == nil {
-		if meta, err := metadata.Parse(metaData); err == nil {
-			details.Type = meta.Asset.Type
-			details.Description = meta.Asset.Description
-			details.Metadata = meta
-		}
-	}
-	if details.Description == "" {
-		details.Description = markdownDescription(
-			filepath.Join(g.repoPath, l.VersionDir(name, latestVersion)))
-	}
-
-	// Get directory timestamps
-	if assetDirInfo, err := os.Stat(assetDir); err == nil {
-		details.CreatedAt = assetDirInfo.ModTime()
-		details.UpdatedAt = assetDirInfo.ModTime()
-	}
-
-	return details, nil
+	return fileVaultAssetDetails(g.repoPath, l, name)
 }
 
 // GetMCPTools returns the asset-shim registrar so callers (notably the cloud

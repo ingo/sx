@@ -242,8 +242,9 @@ func TestPathVaultReadsAfterMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAssets: %v", err)
 	}
-	if len(list.Assets) != 2 {
-		t.Errorf("ListAssets = %d assets, want 2 (%+v)", len(list.Assets), list.Assets)
+	// chat and rules from storage, remote-only from its manifest row.
+	if len(list.Assets) != 3 {
+		t.Errorf("ListAssets = %d assets, want 3 (%+v)", len(list.Assets), list.Assets)
 	}
 }
 
