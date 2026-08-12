@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -138,7 +139,9 @@ func manifestOnlyAssetSummaries(vaultRoot string, seen map[string]bool, opts Lis
 		for _, r := range rows {
 			versions = append(versions, r.Version)
 		}
-		versions = version.Sort(versions)
+		// Sorted duplicates are adjacent; hand-edited manifests can carry
+		// duplicate rows and must not inflate the version count.
+		versions = slices.Compact(version.Sort(versions))
 		latest := versions[len(versions)-1]
 		row := rows[0]
 		for _, r := range rows {
