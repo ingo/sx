@@ -149,6 +149,15 @@ func deleteAssetStorage(vaultRoot string, l layout.Layout, name, ver string) err
 func renameAssetStorage(vaultRoot string, l layout.Layout, oldName, newName string) error {
 	oldDir := filepath.Join(vaultRoot, l.AssetDir(oldName))
 	newDir := filepath.Join(vaultRoot, l.AssetDir(newName))
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		// Manifest-declared assets with no stored files (install-in-place
+		// source-path rows) are visible in listings but have nothing under
+		// assets/ to rename; fail clearly instead of with a raw fs error.
+		if _, ok := findAssetInManifest(vaultRoot, oldName); ok {
+			return fmt.Errorf("asset '%s' has no stored files in this vault; rename its manifest entry in sx.toml instead", oldName)
+		}
+		return fmt.Errorf("asset '%s' not found", oldName)
+	}
 	if _, err := os.Stat(newDir); err == nil {
 		return fmt.Errorf("target asset directory already exists: %s", newName)
 	}
