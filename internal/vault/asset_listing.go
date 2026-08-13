@@ -39,7 +39,7 @@ func listFileVaultAssets(vaultRoot string, l layout.Layout, opts ListAssetsOptio
 	if err != nil {
 		return nil, err
 	}
-	assets = append(assets, manifestOnlyAssetSummaries(vaultRoot, seen, opts, rowsByName, rowOrder)...)
+	assets = append(assets, manifestOnlyAssetSummaries(vaultRoot, l, seen, opts, rowsByName, rowOrder)...)
 	// Stored entries arrive in directory order and manifest entries in
 	// manifest order; sort the merged view so output stays stable.
 	sort.Slice(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
@@ -72,7 +72,7 @@ func storedAssetSummaries(vaultRoot string, l layout.Layout, opts ListAssetsOpti
 			continue
 		}
 		name := entry.Name()
-		stored, err := versionListForAsset(vaultRoot, l, name)
+		stored, err := storedVersionList(vaultRoot, l, name)
 		if err != nil {
 			continue // Skip if versions are unreadable
 		}
@@ -123,16 +123,24 @@ func storedAssetSummaries(vaultRoot string, l layout.Layout, opts ListAssetsOpti
 }
 
 // manifestOnlyAssetSummaries builds summaries for manifest [[assets]] rows
-// whose names have no stored directory under assets/ — install-in-place
-// source-path assets and http/git-sourced rows.
-func manifestOnlyAssetSummaries(vaultRoot string, seen map[string]bool, opts ListAssetsOptions, rowsByName map[string][]manifest.Asset, rowOrder []string) []AssetSummary {
+// whose names have no directory found by the top-level assets/ scan —
+// install-in-place source-path assets, http/git-sourced rows, and
+// namespaced assets ("opsx/apply") whose top-level entry is only a
+// namespace directory. Namespaced assets can still have stored versions,
+// so this unions list.txt with the manifest rows and resolves content
+// through the same layout-aware lookup vault show uses.
+func manifestOnlyAssetSummaries(vaultRoot string, l layout.Layout, seen map[string]bool, opts ListAssetsOptions, rowsByName map[string][]manifest.Asset, rowOrder []string) []AssetSummary {
 	var out []AssetSummary
 	for _, name := range rowOrder {
 		if seen[name] {
 			continue
 		}
 		rows := rowsByName[name]
-		versions := unionVersions(nil, rows)
+		stored, err := storedVersionList(vaultRoot, l, name)
+		if err != nil {
+			stored = nil // degrade to manifest data
+		}
+		versions := unionVersions(stored, rows)
 		if len(versions) == 0 {
 			continue
 		}
@@ -148,7 +156,7 @@ func manifestOnlyAssetSummaries(vaultRoot string, seen map[string]bool, opts Lis
 			LatestVersion: latest,
 			VersionsCount: len(versions),
 		}
-		contentDir, hasContent := sourcePathContentDir(vaultRoot, row.SourcePath)
+		contentDir, hasContent := versionContentDir(vaultRoot, l, rows, name, latest)
 		var meta *metadata.Metadata
 		if summary.Type.Key == "" && hasContent {
 			// A hand-authored row may omit type while its source
@@ -196,7 +204,7 @@ func fileVaultAssetDetails(vaultRoot string, l layout.Layout, name string) (*Ass
 	_, statErr := os.Stat(assetDir)
 	dirExists := statErr == nil
 
-	stored, err := versionListForAsset(vaultRoot, l, name)
+	stored, err := storedVersionList(vaultRoot, l, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get version list: %w", err)
 	}
@@ -287,6 +295,19 @@ func manifestAssetRows(vaultRoot string) (map[string][]manifest.Asset, []string,
 		rows[a.Name] = append(rows[a.Name], a)
 	}
 	return rows, order, nil
+}
+
+// storedVersionList reads an asset's list.txt through the layout, empty
+// when absent. Unlike versionListForAsset it never falls back to the
+// manifest: discovery callers already hold the parsed manifest rows and
+// union them via unionVersions, so the fallback would only re-parse
+// sx.toml once per asset for nothing.
+func storedVersionList(vaultRoot string, l layout.Layout, name string) ([]string, error) {
+	versions, err := readVersionListFile(filepath.Join(vaultRoot, l.VersionListPath(name)))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return versions, err
 }
 
 // unionVersions merges stored list.txt versions with the versions declared

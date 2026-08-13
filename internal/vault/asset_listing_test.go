@@ -393,6 +393,75 @@ func TestNewerManifestOnlyVersionOfStoredAsset(t *testing.T) {
 	}
 }
 
+// A namespaced asset's top-level entry under assets/ is only a namespace
+// directory, so it reaches the manifest merge — which must still surface
+// its stored versions and content, agreeing with vault show.
+func TestListAssetsNamespacedAssetUsesStoredVersions(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// v2 layout: materialized root view + two archived versions.
+	write("assets/opsx/apply/SKILL.md", "# apply 1.1\n")
+	for _, v := range []string{"1.0", "1.1"} {
+		write(".sx/versions/opsx/apply/"+v+"/SKILL.md", "# apply "+v+"\n")
+		write(".sx/versions/opsx/apply/"+v+"/metadata.toml",
+			"[asset]\nname = \"opsx/apply\"\nversion = \""+v+"\"\ntype = \"skill\"\ndescription = \"Apply things\"\n")
+	}
+	write(".sx/versions/opsx/apply/list.txt", "1.0\n1.1\n")
+	m := &manifest.Manifest{
+		SchemaVersion: 2,
+		Assets: []manifest.Asset{
+			{Name: "opsx/apply", Version: "1.1", Type: asset.TypeSkill,
+				SourcePath: &manifest.SourcePath{Path: ".sx/versions/opsx/apply/1.1"}},
+		},
+	}
+	if err := manifest.Save(dir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	list, err := v.ListAssets(ctx, ListAssetsOptions{})
+	if err != nil {
+		t.Fatalf("ListAssets: %v", err)
+	}
+	var summary AssetSummary
+	for _, a := range list.Assets {
+		if a.Name == "opsx/apply" {
+			summary = a
+		}
+	}
+	if summary.Name == "" {
+		t.Fatalf("opsx/apply missing from %+v", list.Assets)
+	}
+	if summary.VersionsCount != 2 || summary.LatestVersion != "1.1" {
+		t.Errorf("summary = %+v, want 2 stored versions with latest 1.1", summary)
+	}
+	if summary.Type.Key != "skill" || summary.Description != "Apply things" {
+		t.Errorf("summary = %+v, want type/description from stored metadata", summary)
+	}
+
+	details, err := v.GetAssetDetails(ctx, "opsx/apply")
+	if err != nil {
+		t.Fatalf("GetAssetDetails: %v", err)
+	}
+	if len(details.Versions) != summary.VersionsCount {
+		t.Errorf("show has %d versions, list says %d — they must agree", len(details.Versions), summary.VersionsCount)
+	}
+}
+
 // Renaming a manifest-only asset must fail with a clear explanation, not a
 // raw filesystem error; renaming an unknown asset says not found.
 func TestRenameManifestOnlyAssetFailsClearly(t *testing.T) {
