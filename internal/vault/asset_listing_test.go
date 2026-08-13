@@ -289,6 +289,16 @@ func TestDiscoverySkipsSourcePathsOutsideVaultRoot(t *testing.T) {
 				SourcePath: &manifest.SourcePath{Path: "~/secrets"}},
 		},
 	}
+	// A committed symlink inside the vault pointing outside it: the
+	// vault-relative path looks contained, but resolution must not follow
+	// it out of the root.
+	symlinkOK := os.Symlink(outside, filepath.Join(dir, "wip")) == nil
+	if symlinkOK {
+		m.Assets = append(m.Assets, manifest.Asset{
+			Name: "symlink", Version: "1.0.0", Type: asset.TypeSkill,
+			SourcePath: &manifest.SourcePath{Path: "wip"},
+		})
+	}
 	if err := manifest.Save(dir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -302,20 +312,30 @@ func TestDiscoverySkipsSourcePathsOutsideVaultRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAssets: %v", err)
 	}
-	if len(list.Assets) != 3 {
-		t.Fatalf("ListAssets = %+v, want all 3 assets (manifest-only data)", list.Assets)
+	wantAssets := 3
+	if symlinkOK {
+		wantAssets = 4
+	}
+	if len(list.Assets) != wantAssets {
+		t.Fatalf("ListAssets = %+v, want all %d assets (manifest-only data)", list.Assets, wantAssets)
 	}
 	for _, a := range list.Assets {
 		if a.Description != "" {
 			t.Errorf("asset %q description = %q, must not be read from outside the vault", a.Name, a.Description)
 		}
 	}
-	details, err := v.GetAssetDetails(ctx, "abs")
-	if err != nil {
-		t.Fatalf("GetAssetDetails: %v", err)
+	names := []string{"abs"}
+	if symlinkOK {
+		names = append(names, "symlink")
 	}
-	if details.Description != "" || details.Versions[0].FilesCount != 0 {
-		t.Errorf("details = %+v, must not expose files outside the vault", details)
+	for _, name := range names {
+		details, err := v.GetAssetDetails(ctx, name)
+		if err != nil {
+			t.Fatalf("GetAssetDetails(%s): %v", name, err)
+		}
+		if details.Description != "" || details.Versions[0].FilesCount != 0 {
+			t.Errorf("details for %q = %+v, must not expose files outside the vault", name, details)
+		}
 	}
 }
 

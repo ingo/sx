@@ -354,8 +354,21 @@ func sourcePathContentDir(vaultRoot string, sp *manifest.SourcePath) (string, bo
 	if filepath.IsAbs(sp.Path) || strings.HasPrefix(sp.Path, "~") {
 		return "", false
 	}
-	root := filepath.Clean(vaultRoot)
-	resolved := filepath.Clean(filepath.Join(root, filepath.FromSlash(sp.Path)))
+	// Evaluate symlinks on BOTH sides before the containment check: every
+	// read below follows symlinks, and a committed symlink inside the vault
+	// can point anywhere on the machine — a lexical Rel check alone would
+	// pass it. Evaluating the root too keeps legitimate paths working when
+	// the vault itself sits behind a symlink (e.g. macOS /tmp, synced
+	// folders). EvalSymlinks also errors for missing paths, which are not
+	// discoverable either.
+	root, err := filepath.EvalSymlinks(filepath.Clean(vaultRoot))
+	if err != nil {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(filepath.Join(root, filepath.FromSlash(sp.Path))))
+	if err != nil {
+		return "", false
+	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
