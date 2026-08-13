@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -459,6 +460,41 @@ func TestListAssetsNamespacedAssetUsesStoredVersions(t *testing.T) {
 	}
 	if len(details.Versions) != summary.VersionsCount {
 		t.Errorf("show has %d versions, list says %d — they must agree", len(details.Versions), summary.VersionsCount)
+	}
+}
+
+// Discovery must keep the documented synced-folder warning: a conflicted
+// list.txt copy is ignored (versions come from the real file) but the
+// warning tells the user it exists (docs/synced-folders.md).
+func TestDiscoveryWarnsAboutConflictedListFile(t *testing.T) {
+	dir := t.TempDir()
+	v := seedV2PathVault(t, dir)
+	conflicted := filepath.Join(dir, ".sx", "versions", "chat", "list.txt (1)")
+	if err := os.WriteFile(conflicted, []byte("9.9\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	list, listErr := v.ListAssets(context.Background(), ListAssetsOptions{})
+	_ = w.Close()
+	os.Stderr = oldStderr
+	captured, _ := io.ReadAll(r)
+
+	if listErr != nil {
+		t.Fatalf("ListAssets: %v", listErr)
+	}
+	for _, a := range list.Assets {
+		if a.Name == "chat" && a.LatestVersion != "2.0" {
+			t.Errorf("chat latest = %q, want 2.0 from the real list.txt", a.LatestVersion)
+		}
+	}
+	if !strings.Contains(string(captured), "sync-conflicted copy") {
+		t.Errorf("stderr = %q, want the sync-conflict warning", captured)
 	}
 }
 

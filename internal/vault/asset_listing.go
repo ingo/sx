@@ -301,13 +301,20 @@ func manifestAssetRows(vaultRoot string) (map[string][]manifest.Asset, []string,
 // when absent. Unlike versionListForAsset it never falls back to the
 // manifest: discovery callers already hold the parsed manifest rows and
 // union them via unionVersions, so the fallback would only re-parse
-// sx.toml once per asset for nothing.
+// sx.toml once per asset for nothing. The synced-folder conflict warning
+// is preserved — list/show are where users browsing a synced vault would
+// notice a conflicted copy.
 func storedVersionList(vaultRoot string, l layout.Layout, name string) ([]string, error) {
-	versions, err := readVersionListFile(filepath.Join(vaultRoot, l.VersionListPath(name)))
+	listPath := filepath.Join(vaultRoot, l.VersionListPath(name))
+	versions, err := readVersionListFile(listPath)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
-	return versions, err
+	if err != nil {
+		return nil, err
+	}
+	warnVersionListConflicts(listPath, name)
+	return versions, nil
 }
 
 // unionVersions merges stored list.txt versions with the versions declared
