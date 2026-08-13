@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sleuth-io/sx/v2/internal/lockfile"
@@ -33,7 +34,10 @@ func manifestAssetVersions(vaultRoot, name string) ([]string, error) {
 		}
 		versions = append(versions, asset.Version)
 	}
-	return version.Sort(versions), nil
+	// Sorted duplicates are adjacent; hand-edited manifests can carry
+	// duplicate name+version rows, which must not surface twice in
+	// GetVersionList or vault show.
+	return slices.Compact(version.Sort(versions)), nil
 }
 
 func findAssetVersionInManifest(vaultRoot, name, version string) (*lockfile.Asset, bool, error) {

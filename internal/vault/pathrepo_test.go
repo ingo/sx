@@ -57,9 +57,10 @@ func TestListAssetsSkipsSyncArtifacts(t *testing.T) {
 	for _, a := range list.Assets {
 		names = append(names, a.Name)
 	}
-	want := map[string]bool{"chat": true, "rules": true, "report (1)": true}
+	// remote-only has no stored files; it is listed from its manifest row.
+	want := map[string]bool{"chat": true, "rules": true, "report (1)": true, "remote-only": true}
 	if len(names) != len(want) {
-		t.Fatalf("ListAssets = %v, want exactly chat, rules, report (1)", names)
+		t.Fatalf("ListAssets = %v, want exactly chat, rules, report (1), remote-only", names)
 	}
 	for _, n := range names {
 		if !want[n] {

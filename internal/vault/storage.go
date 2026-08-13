@@ -149,6 +149,15 @@ func deleteAssetStorage(vaultRoot string, l layout.Layout, name, ver string) err
 func renameAssetStorage(vaultRoot string, l layout.Layout, oldName, newName string) error {
 	oldDir := filepath.Join(vaultRoot, l.AssetDir(oldName))
 	newDir := filepath.Join(vaultRoot, l.AssetDir(newName))
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		// Manifest-declared assets with no stored files (install-in-place
+		// source-path rows) are visible in listings but have nothing under
+		// assets/ to rename; fail clearly instead of with a raw fs error.
+		if _, ok := findAssetInManifest(vaultRoot, oldName); ok {
+			return fmt.Errorf("asset '%s' has no stored files in this vault; rename its manifest entry in sx.toml instead", oldName)
+		}
+		return fmt.Errorf("asset '%s' not found", oldName)
+	}
 	if _, err := os.Stat(newDir); err == nil {
 		return fmt.Errorf("target asset directory already exists: %s", newName)
 	}
@@ -186,12 +195,21 @@ func versionListForAsset(vaultRoot string, l layout.Layout, name string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to read version list: %w", err)
 	}
-	if copies, err := utils.FindConflictCopies(listPath); err == nil && len(copies) > 0 {
-		fmt.Fprintf(os.Stderr, "Warning: ignoring sync-conflicted copy %q for asset %s; using list.txt. Delete it once the folder has synced.\n", copies[0], name)
-	}
+	warnVersionListConflicts(listPath, name)
 	// Callers take the last element as "latest": keep every derivation
 	// semver-sorted regardless of the order versions were appended.
 	return version.Sort(parseVersionList(data)), nil
+}
+
+// warnVersionListConflicts prints the documented synced-folder warning when
+// a conflicted copy of list.txt sits next to the real one (see
+// docs/synced-folders.md): the copy is ignored and the user should delete
+// it once the folder has synced. Every reader that surfaces a version list
+// to the user must call this so the conflict stays visible.
+func warnVersionListConflicts(listPath, name string) {
+	if copies, err := utils.FindConflictCopies(listPath); err == nil && len(copies) > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: ignoring sync-conflicted copy %q for asset %s; using list.txt. Delete it once the folder has synced.\n", copies[0], name)
+	}
 }
 
 // readVersionListFile reads and semver-sorts a list.txt. Returns the
