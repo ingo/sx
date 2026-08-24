@@ -37,13 +37,17 @@ var (
 
 func detect() {
 	detectOnce.Do(func() {
-		// Background detection queries the terminal, so only attempt it
-		// when both ends are TTYs; dark is the safer default elsewhere.
 		darkBG = true
-		if isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd()) {
+		profile = colorprofile.Detect(os.Stdout, os.Environ())
+		// Querying the background color does terminal I/O (OSC 11) and puts
+		// stdin into raw mode, so only do it when the answer can matter
+		// (colors enabled, both ends TTYs) and when it is safe: a background
+		// job touching the terminal would be suspended by SIGTTOU.
+		if profile >= colorprofile.ANSI &&
+			isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd()) &&
+			isForeground() {
 			darkBG = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 		}
-		profile = colorprofile.Detect(os.Stdout, os.Environ())
 	})
 }
 

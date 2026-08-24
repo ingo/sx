@@ -42,9 +42,6 @@ func newProgressModel(description string, width int) progressModel {
 		progress.WithoutPercentage(),
 		progress.WithColors(palette.Primary.Color()),
 	)
-
-	// Style the progress bar
-	p.FullColor = palette.Primary.Color()
 	p.EmptyColor = palette.Border.Color()
 
 	return progressModel{

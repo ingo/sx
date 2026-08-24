@@ -1,13 +1,21 @@
 package theme
 
-import "charm.land/lipgloss/v2"
+import (
+	"sync"
+
+	"charm.land/lipgloss/v2"
+)
 
 // claudeCodeTheme implements the Claude Code visual style.
 // Clean, minimal aesthetic with cyan/blue accents.
 type claudeCodeTheme struct {
 	palette Palette
-	styles  Styles
 	symbols Symbols
+
+	// Styles are built lazily: resolving colors triggers terminal
+	// background detection, which must not run at package init.
+	stylesOnce sync.Once
+	styles     Styles
 }
 
 // Palette is an alias for ColorPalette (for internal use).
@@ -45,12 +53,15 @@ func NewClaudeCodeTheme() Theme {
 		InProgress: "\u25d0", // half circle
 	}
 
-	t := &claudeCodeTheme{
+	return &claudeCodeTheme{
 		palette: palette,
 		symbols: symbols,
 	}
+}
 
-	// Build styles from palette
+// buildStyles composes the styles from the palette.
+func (t *claudeCodeTheme) buildStyles() {
+	palette := t.palette
 	t.styles = Styles{
 		// Message styles
 		Success: lipgloss.NewStyle().
@@ -109,8 +120,6 @@ func NewClaudeCodeTheme() Theme {
 		Progress: lipgloss.NewStyle().
 			Foreground(palette.Primary.Color()),
 	}
-
-	return t
 }
 
 func (t *claudeCodeTheme) Name() string {
@@ -122,6 +131,7 @@ func (t *claudeCodeTheme) Palette() ColorPalette {
 }
 
 func (t *claudeCodeTheme) Styles() Styles {
+	t.stylesOnce.Do(t.buildStyles)
 	return t.styles
 }
 
