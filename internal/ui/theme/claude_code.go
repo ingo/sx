@@ -1,6 +1,6 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // claudeCodeTheme implements the Claude Code visual style.
 // Clean, minimal aesthetic with cyan/blue accents.
@@ -17,21 +17,21 @@ type Palette = ColorPalette
 func NewClaudeCodeTheme() Theme {
 	// Use AdaptiveColor for automatic light/dark terminal support
 	palette := Palette{
-		Primary:   lipgloss.AdaptiveColor{Light: "#0891b2", Dark: "#22d3ee"}, // Cyan
-		Secondary: lipgloss.AdaptiveColor{Light: "#2563eb", Dark: "#60a5fa"}, // Blue
+		Primary:   AdaptiveColor{Light: "#0891b2", Dark: "#22d3ee"}, // Cyan
+		Secondary: AdaptiveColor{Light: "#2563eb", Dark: "#60a5fa"}, // Blue
 
-		Success: lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}, // Green
-		Error:   lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#ef4444"}, // Red
-		Warning: lipgloss.AdaptiveColor{Light: "#ca8a04", Dark: "#facc15"}, // Yellow
-		Info:    lipgloss.AdaptiveColor{Light: "#2563eb", Dark: "#60a5fa"}, // Blue
+		Success: AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}, // Green
+		Error:   AdaptiveColor{Light: "#dc2626", Dark: "#ef4444"}, // Red
+		Warning: AdaptiveColor{Light: "#ca8a04", Dark: "#facc15"}, // Yellow
+		Info:    AdaptiveColor{Light: "#2563eb", Dark: "#60a5fa"}, // Blue
 
-		Text:         lipgloss.AdaptiveColor{Light: "#1f2937", Dark: "#f9fafb"}, // Gray-800/Gray-50
-		TextMuted:    lipgloss.AdaptiveColor{Light: "#6b7280", Dark: "#9ca3af"}, // Gray-500/Gray-400
-		TextFaint:    lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#6b7280"}, // Gray-400/Gray-500 (more subtle)
-		TextEmphasis: lipgloss.AdaptiveColor{Light: "#111827", Dark: "#ffffff"}, // Gray-900/White
+		Text:         AdaptiveColor{Light: "#1f2937", Dark: "#f9fafb"}, // Gray-800/Gray-50
+		TextMuted:    AdaptiveColor{Light: "#6b7280", Dark: "#9ca3af"}, // Gray-500/Gray-400
+		TextFaint:    AdaptiveColor{Light: "#9ca3af", Dark: "#6b7280"}, // Gray-400/Gray-500 (more subtle)
+		TextEmphasis: AdaptiveColor{Light: "#111827", Dark: "#ffffff"}, // Gray-900/White
 
-		Border:    lipgloss.AdaptiveColor{Light: "#d1d5db", Dark: "#4b5563"}, // Gray-300/Gray-600
-		Highlight: lipgloss.AdaptiveColor{Light: "#e0f2fe", Dark: "#0c4a6e"}, // Sky-100/Sky-900
+		Border:    AdaptiveColor{Light: "#d1d5db", Dark: "#4b5563"}, // Gray-300/Gray-600
+		Highlight: AdaptiveColor{Light: "#e0f2fe", Dark: "#0c4a6e"}, // Sky-100/Sky-900
 	}
 
 	symbols := Symbols{
@@ -54,60 +54,60 @@ func NewClaudeCodeTheme() Theme {
 	t.styles = Styles{
 		// Message styles
 		Success: lipgloss.NewStyle().
-			Foreground(palette.Success).
+			Foreground(palette.Success.Color()).
 			Bold(true),
 		Error: lipgloss.NewStyle().
-			Foreground(palette.Error).
+			Foreground(palette.Error.Color()).
 			Bold(true),
 		Warning: lipgloss.NewStyle().
-			Foreground(palette.Warning),
+			Foreground(palette.Warning.Color()),
 		Info: lipgloss.NewStyle().
-			Foreground(palette.Info),
+			Foreground(palette.Info.Color()),
 
 		// Layout styles
 		Header: lipgloss.NewStyle().
-			Foreground(palette.TextEmphasis).
+			Foreground(palette.TextEmphasis.Color()).
 			Bold(true),
 		SubHeader: lipgloss.NewStyle().
-			Foreground(palette.Primary).
+			Foreground(palette.Primary.Color()).
 			Bold(true),
 
 		// Text styles
 		Bold: lipgloss.NewStyle().
-			Foreground(palette.TextEmphasis).
+			Foreground(palette.TextEmphasis.Color()).
 			Bold(true),
 		Muted: lipgloss.NewStyle().
-			Foreground(palette.TextMuted),
+			Foreground(palette.TextMuted.Color()),
 		Faint: lipgloss.NewStyle().
-			Foreground(palette.TextFaint),
+			Foreground(palette.TextFaint.Color()),
 		Emphasis: lipgloss.NewStyle().
-			Foreground(palette.Primary),
+			Foreground(palette.Primary.Color()),
 
 		// List styles
 		ListItem: lipgloss.NewStyle().
-			Foreground(palette.Text),
+			Foreground(palette.Text.Color()),
 		ListBullet: lipgloss.NewStyle().
-			Foreground(palette.Primary),
+			Foreground(palette.Primary.Color()),
 		Selected: lipgloss.NewStyle().
-			Foreground(palette.Primary).
+			Foreground(palette.Primary.Color()).
 			Bold(true),
 		Cursor: lipgloss.NewStyle().
-			Foreground(palette.Primary).
+			Foreground(palette.Primary.Color()).
 			Bold(true),
 
 		// Key-Value styles
 		Key: lipgloss.NewStyle().
-			Foreground(palette.TextMuted),
+			Foreground(palette.TextMuted.Color()),
 		Value: lipgloss.NewStyle().
-			Foreground(palette.Text),
+			Foreground(palette.Text.Color()),
 		Separator: lipgloss.NewStyle().
-			Foreground(palette.TextMuted),
+			Foreground(palette.TextMuted.Color()),
 
 		// Progress/status styles
 		Spinner: lipgloss.NewStyle().
-			Foreground(palette.Primary),
+			Foreground(palette.Primary.Color()),
 		Progress: lipgloss.NewStyle().
-			Foreground(palette.Primary),
+			Foreground(palette.Primary.Color()),
 	}
 
 	return t

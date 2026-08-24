@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -65,7 +65,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.final = msg.message
 		return m, tea.Quit
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.done = true
@@ -81,21 +81,21 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m statusModel) View() string {
+func (m statusModel) View() tea.View {
 	if m.done {
 		if m.final != "" {
 			styles := m.theme.Styles()
 			sym := m.theme.Symbols()
 			if m.success {
-				return styles.Success.Render(sym.Success+" "+m.final) + "\n"
+				return tea.NewView(styles.Success.Render(sym.Success+" "+m.final) + "\n")
 			}
-			return styles.Error.Render(sym.Error+" "+m.final) + "\n"
+			return tea.NewView(styles.Error.Render(sym.Error+" "+m.final) + "\n")
 		}
-		return ""
+		return tea.NewView("")
 	}
 
 	styles := m.theme.Styles()
-	return m.spinner.View() + " " + styles.Muted.Render(m.message)
+	return tea.NewView(m.spinner.View() + " " + styles.Muted.Render(m.message))
 }
 
 // Status provides a transient status line that updates in place.

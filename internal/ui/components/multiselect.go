@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -98,7 +98,7 @@ func (m multiSelectModel) Init() tea.Cmd {
 
 func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, multiSelectKeys.Quit):
 			m.cancelled = true
@@ -140,9 +140,9 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m multiSelectModel) View() string {
+func (m multiSelectModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
 	styles := m.theme.Styles()
@@ -211,7 +211,7 @@ func (m multiSelectModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(styles.Faint.Render("↑/↓ navigate • space toggle • a all • n none • enter confirm"))
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // MultiSelect displays an interactive multi-selection menu and returns the selected options.

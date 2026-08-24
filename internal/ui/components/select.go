@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -79,7 +79,7 @@ func (m selectModel) Init() tea.Cmd {
 
 func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, selectKeys.Quit):
 			m.selected = -1
@@ -109,9 +109,9 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m selectModel) View() string {
+func (m selectModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
 	styles := m.theme.Styles()
@@ -179,7 +179,7 @@ func (m selectModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(styles.Faint.Render("↑/↓ navigate • enter select"))
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // Select displays an interactive selection menu and returns the selected option.

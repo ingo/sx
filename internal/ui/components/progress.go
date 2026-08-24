@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/bubbles/progress"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/progress"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -40,12 +40,12 @@ func newProgressModel(description string, width int) progressModel {
 	p := progress.New(
 		progress.WithWidth(width),
 		progress.WithoutPercentage(),
-		progress.WithSolidFill(string(palette.Primary.Dark)),
+		progress.WithColors(palette.Primary.Color()),
 	)
 
 	// Style the progress bar
-	p.FullColor = string(palette.Primary.Dark)
-	p.EmptyColor = string(palette.Border.Dark)
+	p.FullColor = palette.Primary.Color()
+	p.EmptyColor = palette.Border.Color()
 
 	return progressModel{
 		progress:    p,
@@ -72,7 +72,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		return m, tea.Quit
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.done = true
@@ -80,20 +80,20 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
-		m.progress.Width = min(msg.Width-4, m.width)
+		m.progress.SetWidth(min(msg.Width-4, m.width))
 
 	case progress.FrameMsg:
 		progressModel, cmd := m.progress.Update(msg)
-		m.progress = progressModel.(progress.Model)
+		m.progress = progressModel
 		return m, cmd
 	}
 
 	return m, nil
 }
 
-func (m progressModel) View() string {
+func (m progressModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
 	styles := m.theme.Styles()
@@ -113,7 +113,7 @@ func (m progressModel) View() string {
 	b.WriteString(" ")
 	b.WriteString(styles.Muted.Render(fmt.Sprintf("%3.0f%%", m.percent*100)))
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // ProgressBar represents an interactive progress bar.
