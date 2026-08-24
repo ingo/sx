@@ -48,7 +48,9 @@ func themedInputStyles(th theme.Theme) textinput.Styles {
 	styles.Focused.Prompt = th.Styles().Emphasis
 	styles.Focused.Text = th.Styles().Value
 	styles.Focused.Placeholder = th.Styles().Muted
-	styles.Blurred = styles.Focused
+	styles.Blurred.Prompt = th.Styles().Muted
+	styles.Blurred.Text = th.Styles().Muted
+	styles.Blurred.Placeholder = th.Styles().Faint
 	styles.Cursor.Color = th.Palette().Primary.Color()
 	return styles
 }

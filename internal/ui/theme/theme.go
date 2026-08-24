@@ -39,12 +39,16 @@ func detect() {
 	detectOnce.Do(func() {
 		darkBG = true
 		profile = colorprofile.Detect(os.Stdout, os.Environ())
+		// Matches ui.IsTTY, which theme can't import without a cycle.
+		isTTY := func(f *os.File) bool {
+			return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
+		}
 		// Querying the background color does terminal I/O (OSC 11) and puts
 		// stdin into raw mode, so only do it when the answer can matter
 		// (colors enabled, both ends TTYs) and when it is safe: a background
 		// job touching the terminal would be suspended by SIGTTOU.
 		if profile >= colorprofile.ANSI &&
-			isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd()) &&
+			isTTY(os.Stdin) && isTTY(os.Stdout) &&
 			isForeground() {
 			darkBG = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 		}

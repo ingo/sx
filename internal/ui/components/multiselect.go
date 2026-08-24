@@ -33,6 +33,7 @@ type multiSelectModel struct {
 	done      bool
 	cancelled bool
 	theme     theme.Theme
+	styles    theme.Styles
 	width     int
 }
 
@@ -83,12 +84,16 @@ func newMultiSelectModel(title string, options []MultiSelectOption) multiSelectM
 	optsCopy := make([]MultiSelectOption, len(options))
 	copy(optsCopy, options)
 
+	th := theme.Current()
 	return multiSelectModel{
 		title:   title,
 		options: optsCopy,
 		cursor:  0,
-		theme:   theme.Current(),
-		width:   60,
+		theme:   th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
+		width:  60,
 	}
 }
 
@@ -145,7 +150,7 @@ func (m multiSelectModel) View() tea.View {
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 	sym := m.theme.Symbols()
 
 	var b strings.Builder

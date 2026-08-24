@@ -25,6 +25,7 @@ type confirmModel struct {
 	done       bool
 	cancelled  bool
 	theme      theme.Theme
+	styles     theme.Styles
 	width      int
 }
 
@@ -65,12 +66,16 @@ func newConfirmModel(message string, defaultYes bool) confirmModel {
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
 		width = w
 	}
+	th := theme.Current()
 	return confirmModel{
 		message:    message,
 		confirmed:  defaultYes,
 		defaultYes: defaultYes,
-		theme:      theme.Current(),
-		width:      width,
+		theme:      th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
+		width:  width,
 	}
 }
 
@@ -115,7 +120,7 @@ func (m confirmModel) View() tea.View {
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 
 	var yes, no string
 	if m.confirmed {

@@ -32,6 +32,7 @@ type selectModel struct {
 	selected int
 	done     bool
 	theme    theme.Theme
+	styles   theme.Styles
 	width    int
 }
 
@@ -63,13 +64,17 @@ var selectKeys = selectKeyMap{
 }
 
 func newSelectModel(title string, options []Option) selectModel {
+	th := theme.Current()
 	return selectModel{
 		title:    title,
 		options:  options,
 		cursor:   0,
 		selected: -1,
-		theme:    theme.Current(),
-		width:    60,
+		theme:    th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
+		width:  60,
 	}
 }
 
@@ -114,7 +119,7 @@ func (m selectModel) View() tea.View {
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 	sym := m.theme.Symbols()
 
 	var b strings.Builder
