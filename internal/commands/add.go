@@ -77,7 +77,6 @@ func NewAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [source-or-asset-name]",
 		Short: "Add an asset or configure an existing one",
-		Long:  addLongHelp(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var input string
@@ -132,6 +131,8 @@ func NewAddCommand() *cobra.Command {
 	_ = cmd.Flags().MarkDeprecated("scope-global", "use --org")
 	_ = cmd.Flags().MarkDeprecated("scope-repo", "use --repo or --path")
 	_ = cmd.Flags().MarkDeprecated("scope", "use --user me")
+
+	lazyLongHelp(cmd, addLongHelp)
 
 	return cmd
 }

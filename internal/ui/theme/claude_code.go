@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // claudeCodeTheme implements the Claude Code visual style.
@@ -62,14 +63,17 @@ func NewClaudeCodeTheme() Theme {
 // buildStyles composes the styles from the palette.
 func (t *claudeCodeTheme) buildStyles() {
 	palette := t.palette
+	// Below ANSI, Convert() drops colors but lipgloss v2 still emits SGR
+	// attributes unconditionally, so suppress bold along with color.
+	bold := Profile() > colorprofile.ASCII
 	t.styles = Styles{
 		// Message styles
 		Success: lipgloss.NewStyle().
 			Foreground(palette.Success.Color()).
-			Bold(true),
+			Bold(bold),
 		Error: lipgloss.NewStyle().
 			Foreground(palette.Error.Color()).
-			Bold(true),
+			Bold(bold),
 		Warning: lipgloss.NewStyle().
 			Foreground(palette.Warning.Color()),
 		Info: lipgloss.NewStyle().
@@ -78,15 +82,15 @@ func (t *claudeCodeTheme) buildStyles() {
 		// Layout styles
 		Header: lipgloss.NewStyle().
 			Foreground(palette.TextEmphasis.Color()).
-			Bold(true),
+			Bold(bold),
 		SubHeader: lipgloss.NewStyle().
 			Foreground(palette.Primary.Color()).
-			Bold(true),
+			Bold(bold),
 
 		// Text styles
 		Bold: lipgloss.NewStyle().
 			Foreground(palette.TextEmphasis.Color()).
-			Bold(true),
+			Bold(bold),
 		Muted: lipgloss.NewStyle().
 			Foreground(palette.TextMuted.Color()),
 		Faint: lipgloss.NewStyle().
@@ -101,10 +105,10 @@ func (t *claudeCodeTheme) buildStyles() {
 			Foreground(palette.Primary.Color()),
 		Selected: lipgloss.NewStyle().
 			Foreground(palette.Primary.Color()).
-			Bold(true),
+			Bold(bold),
 		Cursor: lipgloss.NewStyle().
 			Foreground(palette.Primary.Color()).
-			Bold(true),
+			Bold(bold),
 
 		// Key-Value styles
 		Key: lipgloss.NewStyle().

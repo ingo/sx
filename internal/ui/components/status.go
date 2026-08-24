@@ -33,6 +33,7 @@ type statusModel struct {
 	success bool
 	final   string
 	theme   theme.Theme
+	styles  theme.Styles
 }
 
 func newStatusModel(message string) statusModel {
@@ -46,6 +47,9 @@ func newStatusModel(message string) statusModel {
 		spinner: s,
 		message: message,
 		theme:   th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
 	}
 }
 
@@ -84,18 +88,16 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m statusModel) View() tea.View {
 	if m.done {
 		if m.final != "" {
-			styles := m.theme.Styles()
 			sym := m.theme.Symbols()
 			if m.success {
-				return tea.NewView(styles.Success.Render(sym.Success+" "+m.final) + "\n")
+				return tea.NewView(m.styles.Success.Render(sym.Success+" "+m.final) + "\n")
 			}
-			return tea.NewView(styles.Error.Render(sym.Error+" "+m.final) + "\n")
+			return tea.NewView(m.styles.Error.Render(sym.Error+" "+m.final) + "\n")
 		}
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
-	return tea.NewView(m.spinner.View() + " " + styles.Muted.Render(m.message))
+	return tea.NewView(m.spinner.View() + " " + m.styles.Muted.Render(m.message))
 }
 
 // Status provides a transient status line that updates in place.

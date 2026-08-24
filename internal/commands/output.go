@@ -10,6 +10,16 @@ import (
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
 )
 
+// lazyLongHelp defers styled long-help construction to help render time.
+// Resolving theme styles may query the terminal, so building the command
+// tree must not do it.
+func lazyLongHelp(cmd *cobra.Command, build func() string) {
+	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		c.Long = build()
+		c.Parent().HelpFunc()(c, args)
+	})
+}
+
 // Context key for test prompter injection
 type prompterKeyType struct{}
 

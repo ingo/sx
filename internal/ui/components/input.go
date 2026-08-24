@@ -21,7 +21,7 @@ type inputModel struct {
 	prompt    string
 	done      bool
 	cancelled bool
-	theme     theme.Theme
+	styles    theme.Styles
 }
 
 func newInputModel(prompt, placeholder, defaultValue string) inputModel {
@@ -38,7 +38,9 @@ func newInputModel(prompt, placeholder, defaultValue string) inputModel {
 	return inputModel{
 		textInput: ti,
 		prompt:    prompt,
-		theme:     th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
 	}
 }
 
@@ -84,8 +86,7 @@ func (m inputModel) View() tea.View {
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
-	return tea.NewView(styles.Bold.Render(m.prompt) + " " + m.textInput.View())
+	return tea.NewView(m.styles.Bold.Render(m.prompt) + " " + m.textInput.View())
 }
 
 // Value returns the current input value.
@@ -188,7 +189,7 @@ func PasswordWithIO(prompt string, in io.Reader, out io.Writer) (string, error) 
 	m := inputModel{
 		textInput: ti,
 		prompt:    prompt,
-		theme:     th,
+		styles:    th.Styles(),
 	}
 
 	p := tea.NewProgram(m, tea.WithOutput(out))

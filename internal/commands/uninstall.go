@@ -73,7 +73,6 @@ func NewUninstallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Uninstall assets from the current repo or all scopes",
-		Long:  uninstallLongHelp(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := UninstallOptions{
 				All:         all,
@@ -91,6 +90,8 @@ func NewUninstallCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be uninstalled without removing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose output")
 	cmd.Flags().StringVar(&clientsFlag, "clients", "", "Comma-separated client IDs to uninstall from (e.g., 'claude-code,cursor')")
+
+	lazyLongHelp(cmd, uninstallLongHelp)
 
 	return cmd
 }
