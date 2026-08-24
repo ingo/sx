@@ -157,21 +157,26 @@ Capture what your best AI users have learned and spread it to everyone automatic
 		},
 	}
 
-	// Set colored version and help templates
-	styles := theme.Current().Styles()
-	rootCmd.SetVersionTemplate(
-		styles.Bold.Render("sx") + " " +
-			styles.Emphasis.Render(buildinfo.Version) + " " +
-			styles.Muted.Render("(commit: "+buildinfo.Commit+", built: "+buildinfo.Date+")") + "\n",
-	)
+	// Set colored version and help templates. Template funcs resolve styles
+	// when the template renders, not here: the first style resolution may
+	// query the terminal, which most commands should never pay for.
+	bold := func(strs ...string) string { return theme.Current().Styles().Bold.Render(strs...) }
+	emphasis := func(strs ...string) string { return theme.Current().Styles().Emphasis.Render(strs...) }
+	muted := func(strs ...string) string { return theme.Current().Styles().Muted.Render(strs...) }
+	header := func(strs ...string) string { return theme.Current().Styles().Header.Render(strs...) }
 
-	// Set colored help template
-	cobra.AddTemplateFunc("bold", styles.Bold.Render)
-	cobra.AddTemplateFunc("emphasis", styles.Emphasis.Render)
-	cobra.AddTemplateFunc("muted", styles.Muted.Render)
-	cobra.AddTemplateFunc("header", styles.Header.Render)
+	cobra.AddTemplateFunc("styledVersion", func() string {
+		return bold("sx") + " " + emphasis(buildinfo.Version) + " " +
+			muted("(commit: "+buildinfo.Commit+", built: "+buildinfo.Date+")")
+	})
+	rootCmd.SetVersionTemplate("{{styledVersion}}\n")
+
+	cobra.AddTemplateFunc("bold", bold)
+	cobra.AddTemplateFunc("emphasis", emphasis)
+	cobra.AddTemplateFunc("muted", muted)
+	cobra.AddTemplateFunc("header", header)
 	cobra.AddTemplateFunc("join", joinStrings)
-	cobra.AddTemplateFunc("colorizeFlags", colorizeFlags(styles.Emphasis.Render))
+	cobra.AddTemplateFunc("colorizeFlags", colorizeFlags(emphasis))
 
 	rootCmd.SetHelpTemplate(`{{if .Long}}{{.Long}}{{else}}{{.Short}}{{end}}{{if .Version}}
 {{muted .Version}}{{end}}

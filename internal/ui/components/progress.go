@@ -29,7 +29,7 @@ type progressModel struct {
 	description string
 	percent     float64
 	done        bool
-	theme       theme.Theme
+	styles      theme.Styles
 	width       int
 }
 
@@ -47,8 +47,10 @@ func newProgressModel(description string, width int) progressModel {
 	return progressModel{
 		progress:    p,
 		description: description,
-		theme:       th,
-		width:       width,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
+		width:  width,
 	}
 }
 
@@ -93,7 +95,7 @@ func (m progressModel) View() tea.View {
 		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 
 	var b strings.Builder
 
