@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/reflow/wordwrap"
 	"golang.org/x/term"
 
@@ -24,7 +24,7 @@ type confirmModel struct {
 	defaultYes bool
 	done       bool
 	cancelled  bool
-	theme      theme.Theme
+	styles     theme.Styles
 	width      int
 }
 
@@ -69,8 +69,10 @@ func newConfirmModel(message string, defaultYes bool) confirmModel {
 		message:    message,
 		confirmed:  defaultYes,
 		defaultYes: defaultYes,
-		theme:      theme.Current(),
-		width:      width,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: theme.Current().Styles(),
+		width:  width,
 	}
 }
 
@@ -80,7 +82,7 @@ func (m confirmModel) Init() tea.Cmd {
 
 func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, confirmKeys.Quit):
 			m.confirmed = false
@@ -110,12 +112,12 @@ func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m confirmModel) View() string {
+func (m confirmModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 
 	var yes, no string
 	if m.confirmed {
@@ -133,7 +135,7 @@ func (m confirmModel) View() string {
 	// Wrap message if needed
 	wrappedMsg := wordwrap.String(m.message, msgWidth)
 
-	return fmt.Sprintf("%s %s %s", wrappedMsg, yes, no)
+	return tea.NewView(fmt.Sprintf("%s %s %s", wrappedMsg, yes, no))
 }
 
 // Confirm displays an interactive confirmation prompt.

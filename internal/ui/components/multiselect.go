@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -33,6 +33,7 @@ type multiSelectModel struct {
 	done      bool
 	cancelled bool
 	theme     theme.Theme
+	styles    theme.Styles
 	width     int
 }
 
@@ -83,12 +84,16 @@ func newMultiSelectModel(title string, options []MultiSelectOption) multiSelectM
 	optsCopy := make([]MultiSelectOption, len(options))
 	copy(optsCopy, options)
 
+	th := theme.Current()
 	return multiSelectModel{
 		title:   title,
 		options: optsCopy,
 		cursor:  0,
-		theme:   theme.Current(),
-		width:   60,
+		theme:   th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
+		width:  60,
 	}
 }
 
@@ -98,7 +103,7 @@ func (m multiSelectModel) Init() tea.Cmd {
 
 func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, multiSelectKeys.Quit):
 			m.cancelled = true
@@ -140,12 +145,12 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m multiSelectModel) View() string {
+func (m multiSelectModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
+	styles := m.styles
 	sym := m.theme.Symbols()
 
 	var b strings.Builder
@@ -211,7 +216,7 @@ func (m multiSelectModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(styles.Faint.Render("↑/↓ navigate • space toggle • a all • n none • enter confirm"))
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // MultiSelect displays an interactive multi-selection menu and returns the selected options.

@@ -2,33 +2,94 @@
 package theme
 
 import (
+	"image/color"
+	"os"
 	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/mattn/go-isatty"
 )
+
+// AdaptiveColor defines a color with variants for light and dark terminal
+// backgrounds. Lipgloss v2 dropped its own AdaptiveColor, so resolution
+// against the detected background happens here.
+type AdaptiveColor struct {
+	Light string
+	Dark  string
+}
+
+// Color resolves the variant matching the detected terminal background,
+// downsampled to the terminal's color profile.
+func (c AdaptiveColor) Color() color.Color {
+	hex := c.Light
+	if IsDarkBackground() {
+		hex = c.Dark
+	}
+	return Profile().Convert(lipgloss.Color(hex))
+}
+
+var (
+	detectOnce sync.Once
+	darkBG     bool
+	profile    colorprofile.Profile
+)
+
+func detect() {
+	detectOnce.Do(func() {
+		darkBG = true
+		profile = colorprofile.Detect(os.Stdout, os.Environ())
+		// Matches ui.IsTTY, which theme can't import without a cycle.
+		isTTY := func(f *os.File) bool {
+			return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
+		}
+		// Querying the background color does terminal I/O (OSC 11) and puts
+		// stdin into raw mode, so only do it when the answer can matter
+		// (colors enabled, both ends TTYs) and when it is safe: a background
+		// job touching the terminal would be suspended by SIGTTOU.
+		if profile >= colorprofile.ANSI &&
+			isTTY(os.Stdin) && isTTY(os.Stdout) &&
+			isForeground() {
+			darkBG = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+		}
+	})
+}
+
+// IsDarkBackground reports whether the terminal has a dark background.
+// Defaults to dark when detection is not possible (non-TTY).
+func IsDarkBackground() bool {
+	detect()
+	return darkBG
+}
+
+// Profile returns the detected terminal color profile.
+func Profile() colorprofile.Profile {
+	detect()
+	return profile
+}
 
 // ColorPalette defines the colors used by a theme.
 type ColorPalette struct {
 	// Primary accent color (e.g., cyan for Claude Code)
-	Primary lipgloss.AdaptiveColor
+	Primary AdaptiveColor
 	// Secondary accent color (e.g., blue)
-	Secondary lipgloss.AdaptiveColor
+	Secondary AdaptiveColor
 
 	// Status colors
-	Success lipgloss.AdaptiveColor
-	Error   lipgloss.AdaptiveColor
-	Warning lipgloss.AdaptiveColor
-	Info    lipgloss.AdaptiveColor
+	Success AdaptiveColor
+	Error   AdaptiveColor
+	Warning AdaptiveColor
+	Info    AdaptiveColor
 
 	// Text colors
-	Text         lipgloss.AdaptiveColor
-	TextMuted    lipgloss.AdaptiveColor
-	TextFaint    lipgloss.AdaptiveColor
-	TextEmphasis lipgloss.AdaptiveColor
+	Text         AdaptiveColor
+	TextMuted    AdaptiveColor
+	TextFaint    AdaptiveColor
+	TextEmphasis AdaptiveColor
 
 	// UI element colors
-	Border    lipgloss.AdaptiveColor
-	Highlight lipgloss.AdaptiveColor
+	Border    AdaptiveColor
+	Highlight AdaptiveColor
 }
 
 // Symbols defines the glyphs used for various states.

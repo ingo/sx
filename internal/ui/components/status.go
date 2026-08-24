@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -33,6 +33,7 @@ type statusModel struct {
 	success bool
 	final   string
 	theme   theme.Theme
+	styles  theme.Styles
 }
 
 func newStatusModel(message string) statusModel {
@@ -46,6 +47,9 @@ func newStatusModel(message string) statusModel {
 		spinner: s,
 		message: message,
 		theme:   th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
 	}
 }
 
@@ -65,7 +69,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.final = msg.message
 		return m, tea.Quit
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.done = true
@@ -81,21 +85,19 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m statusModel) View() string {
+func (m statusModel) View() tea.View {
 	if m.done {
 		if m.final != "" {
-			styles := m.theme.Styles()
 			sym := m.theme.Symbols()
 			if m.success {
-				return styles.Success.Render(sym.Success+" "+m.final) + "\n"
+				return tea.NewView(m.styles.Success.Render(sym.Success+" "+m.final) + "\n")
 			}
-			return styles.Error.Render(sym.Error+" "+m.final) + "\n"
+			return tea.NewView(m.styles.Error.Render(sym.Error+" "+m.final) + "\n")
 		}
-		return ""
+		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
-	return m.spinner.View() + " " + styles.Muted.Render(m.message)
+	return tea.NewView(m.spinner.View() + " " + m.styles.Muted.Render(m.message))
 }
 
 // Status provides a transient status line that updates in place.

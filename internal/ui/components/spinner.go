@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -25,7 +25,7 @@ type spinnerModel struct {
 	message string
 	done    bool
 	err     error
-	theme   theme.Theme
+	styles  theme.Styles
 }
 
 func newSpinnerModel(message string) spinnerModel {
@@ -38,7 +38,9 @@ func newSpinnerModel(message string) spinnerModel {
 	return spinnerModel{
 		spinner: s,
 		message: message,
-		theme:   th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
 	}
 }
 
@@ -53,7 +55,7 @@ func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, tea.Quit
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.done = true
@@ -70,13 +72,12 @@ func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m spinnerModel) View() string {
+func (m spinnerModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
-	return m.spinner.View() + " " + styles.Muted.Render(m.message)
+	return tea.NewView(m.spinner.View() + " " + m.styles.Muted.Render(m.message))
 }
 
 // Spinner displays a spinner with a message.

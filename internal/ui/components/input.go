@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -21,7 +21,7 @@ type inputModel struct {
 	prompt    string
 	done      bool
 	cancelled bool
-	theme     theme.Theme
+	styles    theme.Styles
 }
 
 func newInputModel(prompt, placeholder, defaultValue string) inputModel {
@@ -30,19 +30,31 @@ func newInputModel(prompt, placeholder, defaultValue string) inputModel {
 	ti.SetValue(defaultValue)
 	ti.Focus()
 	ti.CharLimit = 256
-	ti.Width = 50
+	ti.SetWidth(50)
 
 	th := theme.Current()
-	ti.PromptStyle = th.Styles().Emphasis
-	ti.TextStyle = th.Styles().Value
-	ti.PlaceholderStyle = th.Styles().Muted
-	ti.Cursor.Style = th.Styles().Cursor
+	ti.SetStyles(themedInputStyles(th))
 
 	return inputModel{
 		textInput: ti,
 		prompt:    prompt,
-		theme:     th,
+		// Resolve styles now: the first resolution may query the terminal,
+		// which must happen before bubbletea takes it over.
+		styles: th.Styles(),
 	}
+}
+
+// themedInputStyles adapts the theme to the textinput v2 styles structure.
+func themedInputStyles(th theme.Theme) textinput.Styles {
+	styles := textinput.DefaultStyles(theme.IsDarkBackground())
+	styles.Focused.Prompt = th.Styles().Emphasis
+	styles.Focused.Text = th.Styles().Value
+	styles.Focused.Placeholder = th.Styles().Muted
+	styles.Blurred.Prompt = th.Styles().Muted
+	styles.Blurred.Text = th.Styles().Muted
+	styles.Blurred.Placeholder = th.Styles().Faint
+	styles.Cursor.Color = th.Palette().Primary.Color()
+	return styles
 }
 
 func (m inputModel) Init() tea.Cmd {
@@ -53,7 +65,7 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "enter":
 			m.done = true
@@ -69,13 +81,12 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m inputModel) View() string {
+func (m inputModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
 
-	styles := m.theme.Styles()
-	return styles.Bold.Render(m.prompt) + " " + m.textInput.View()
+	return tea.NewView(m.styles.Bold.Render(m.prompt) + " " + m.textInput.View())
 }
 
 // Value returns the current input value.
@@ -170,16 +181,15 @@ func PasswordWithIO(prompt string, in io.Reader, out io.Writer) (string, error) 
 	ti.EchoCharacter = '•'
 	ti.Focus()
 	ti.CharLimit = 256
-	ti.Width = 50
+	ti.SetWidth(50)
 
 	th := theme.Current()
-	ti.PromptStyle = th.Styles().Emphasis
-	ti.TextStyle = th.Styles().Value
+	ti.SetStyles(themedInputStyles(th))
 
 	m := inputModel{
 		textInput: ti,
 		prompt:    prompt,
-		theme:     th,
+		styles:    th.Styles(),
 	}
 
 	p := tea.NewProgram(m, tea.WithOutput(out))

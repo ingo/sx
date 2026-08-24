@@ -85,7 +85,6 @@ func NewSelfUninstallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "self-uninstall",
 		Short: "Completely remove sx, its config, cache, and all installed assets",
-		Long:  selfUninstallLongHelp(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSelfUninstall(cmd, opts)
 		},
@@ -96,6 +95,8 @@ func NewSelfUninstallCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.KeepAssets, "keep-assets", false, "Do not uninstall assets — only remove sx itself")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "Continue with config, cache, and binary removal even if asset cleanup fails")
 	cmd.Flags().BoolVar(&opts.Verbose, "verbose", false, "Verbose output")
+
+	lazyLongHelp(cmd, selfUninstallLongHelp)
 
 	return cmd
 }
