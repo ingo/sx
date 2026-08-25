@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -284,6 +283,6 @@ func confirmSelfUninstall(styledOut *ui.Output, in io.Reader) bool {
 	if err != nil {
 		return false
 	}
-	response = strings.ToLower(response)
+	response = confirmAnswer(response)
 	return response == "y" || response == "yes"
 }

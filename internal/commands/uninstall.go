@@ -721,7 +721,7 @@ func confirmUninstall(styledOut *ui.Output, in io.Reader) bool {
 		return false
 	}
 
-	response = strings.ToLower(response)
+	response = confirmAnswer(response)
 	return response == "y" || response == "yes"
 }
 

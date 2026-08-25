@@ -2,10 +2,10 @@ package commands
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -51,18 +51,27 @@ func readPromptLine(in io.Reader) (string, error) {
 	}
 	response, err := reader.ReadString('\n')
 	// EOF with a partial line still carries the user's answer (e.g.
-	// `printf 'y' | sx uninstall`); only fail when nothing was read.
-	if err != nil && response == "" {
+	// `printf 'y' | sx uninstall`); any other error fails closed even if
+	// bytes were read — a torn tty read must not confirm anything.
+	if err != nil && (!errors.Is(err, io.EOF) || response == "") {
 		return "", err
 	}
-	response = ansi.Strip(response)
-	response = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
+	return strings.TrimSpace(ansi.Strip(response)), nil
+}
+
+// confirmAnswer reduces a prompt line to the ASCII answer a y/N prompt
+// expects. Escape-sequence residue that ansi.Strip cannot attribute (bare
+// C0 terminators, 8-bit C1 introducers from torn terminal replies) is not
+// valid UTF-8 text, so anything outside printable ASCII is dropped. Only
+// for yes/no answers — free-text responses must round-trip verbatim.
+func confirmAnswer(line string) string {
+	var b strings.Builder
+	for i := range len(line) {
+		if line[i] >= 0x20 && line[i] <= 0x7e {
+			b.WriteByte(line[i])
 		}
-		return r
-	}, response)
-	return strings.TrimSpace(response), nil
+	}
+	return strings.ToLower(strings.TrimSpace(b.String()))
 }
 
 // Prompt displays a prompt and reads user input
@@ -91,6 +100,6 @@ func (p *StdPrompter) Confirm(message string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	response = strings.ToLower(response)
+	response = confirmAnswer(response)
 	return response == "" || response == "y" || response == "yes", nil
 }

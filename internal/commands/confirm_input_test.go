@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,6 +37,11 @@ func TestConfirmUninstall(t *testing.T) {
 		{"only stray responses defaults to no", strayTerminalResponses + "\n", false},
 		{"yes with bare control residue from torn reply", "\x07y\n", true},
 		{"yes without trailing newline", "y", true},
+		// A bare 8-bit OSC introducer (\x9d) is not tested as recoverable:
+		// ansi.Strip correctly parses everything after it as escape-sequence
+		// payload, so the answer is formally ambiguous and the prompt fails
+		// closed to No — the safe default for a destructive operation.
+		{"8-bit C1 introducer swallows the line, defaults to no", "\x9dy\n", false},
 	}
 
 	for _, tt := range tests {
@@ -66,6 +72,42 @@ func TestConfirmSelfUninstall(t *testing.T) {
 				t.Errorf("confirmSelfUninstall(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// errAfterReader yields its data, then fails with a non-EOF error.
+type errAfterReader struct {
+	data string
+	done bool
+}
+
+func (r *errAfterReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("tty read failed")
+	}
+	r.done = true
+	return copy(p, r.data), errors.New("tty read failed")
+}
+
+// TestConfirmUninstallFailsClosedOnReadError: a partial answer followed by a
+// real read error (not EOF) must not confirm a destructive operation.
+func TestConfirmUninstallFailsClosedOnReadError(t *testing.T) {
+	if confirmUninstall(discardOutput(), &errAfterReader{data: "y"}) {
+		t.Error("confirmUninstall = true on partial read with non-EOF error, want false (fail closed)")
+	}
+}
+
+// TestStdPrompterPromptPreservesNonUTF8Bytes: free-text prompt responses
+// must round-trip verbatim (minus escape sequences), not be rewritten to
+// U+FFFD replacement runes.
+func TestStdPrompterPromptPreservesNonUTF8Bytes(t *testing.T) {
+	p := NewStdPrompter(strings.NewReader("caf\xe9\n"), &bytes.Buffer{})
+	got, err := p.Prompt("Name? ")
+	if err != nil {
+		t.Fatalf("Prompt returned error: %v", err)
+	}
+	if got != "caf\xe9" {
+		t.Errorf("Prompt = %q, want %q (latin-1 byte mangled)", got, "caf\xe9")
 	}
 }
 
