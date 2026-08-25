@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // syncBuffer is a goroutine-safe bytes.Buffer for capturing async writes.
@@ -33,6 +35,12 @@ func newTTYStatus(buf *syncBuffer) *Status {
 	s := NewStatus(buf)
 	s.noTTY = false
 	return s
+}
+
+// visibleWidth returns the display-cell width of a segment with escape
+// sequences removed.
+func visibleWidth(seg string) int {
+	return ansi.StringWidth(seg)
 }
 
 // TestStatusTTYWritesNoTerminalQueries pins SK-763: the status line must not
@@ -85,6 +93,49 @@ func TestStatusTTYFailShowsErrorMessage(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "it broke") {
 		t.Errorf("status output missing failure message\noutput: %q", buf.String())
+	}
+}
+
+// TestStatusFinishWithoutStartIsNoOp: Done/Fail/Clear on a TTY status that
+// was never started must not write escape sequences over unrelated output.
+func TestStatusFinishWithoutStartIsNoOp(t *testing.T) {
+	buf := &syncBuffer{}
+	s := newTTYStatus(buf)
+	s.Done("boom")
+	s.Fail("boom")
+	s.Clear()
+	if got := buf.String(); got != "" {
+		t.Errorf("finish without Start wrote %q, want nothing", got)
+	}
+}
+
+// TestStatusDoubleDonePrintsFinalOnce: a duplicated Done must not erase the
+// terminal line again or repeat the final message.
+func TestStatusDoubleDonePrintsFinalOnce(t *testing.T) {
+	buf := &syncBuffer{}
+	s := newTTYStatus(buf)
+	s.Start("Working")
+	s.Done("all good")
+	s.Done("all good")
+	if n := strings.Count(buf.String(), "all good"); n != 1 {
+		t.Errorf("final message printed %d times, want 1\noutput: %q", n, buf.String())
+	}
+}
+
+// TestStatusTruncatesToTerminalWidth: the status line must stay on one row,
+// or in-place erasing leaves wrapped residue on narrow terminals.
+func TestStatusTruncatesToTerminalWidth(t *testing.T) {
+	buf := &syncBuffer{}
+	s := newTTYStatus(buf)
+	s.termWidth = func() int { return 20 }
+
+	s.Start("this message is much longer than twenty columns")
+	s.Done("")
+
+	for _, seg := range strings.Split(buf.String(), "\r") {
+		if w := visibleWidth(seg); w > 20 {
+			t.Errorf("rendered segment %q is %d cells wide, want <= 20", seg, w)
+		}
 	}
 }
 

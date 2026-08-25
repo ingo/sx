@@ -3,9 +3,13 @@ package components
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
@@ -30,8 +34,13 @@ type Status struct {
 	mu     sync.Mutex
 	silent bool
 
+	// termWidth reports the terminal width in cells (0 = unknown).
+	// Overridable in tests.
+	termWidth func() int
+
 	message string
 	frame   int
+	started bool
 	running bool
 	stop    chan struct{}
 	stopped chan struct{}
@@ -40,9 +49,23 @@ type Status struct {
 // NewStatus creates a new status line.
 func NewStatus(out io.Writer) *Status {
 	return &Status{
-		out:   out,
-		noTTY: !ui.IsTTY(out),
+		out:       out,
+		noTTY:     !ui.IsTTY(out),
+		termWidth: func() int { return terminalWidth(out) },
 	}
+}
+
+// terminalWidth returns the terminal width for out, or 0 if unknown.
+func terminalWidth(out io.Writer) int {
+	f, ok := out.(*os.File)
+	if !ok {
+		return 0
+	}
+	w, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || w <= 0 {
+		return 0
+	}
+	return w
 }
 
 // SetSilent enables silent mode (no output).
@@ -55,7 +78,13 @@ func (s *Status) SetSilent(silent bool) {
 func (s *Status) render() {
 	styles := theme.Current().Styles()
 	frame := styles.Spinner.Render(statusFrames[s.frame%len(statusFrames)])
-	fmt.Fprintf(s.out, "\r\x1b[K%s %s", frame, styles.Muted.Render(s.message))
+	line := frame + " " + styles.Muted.Render(s.message)
+	// Keep the line to a single row: in-place erasing (\r + EL) only
+	// covers the current row, so a wrapped line would leave residue.
+	if w := s.termWidth(); w > 0 {
+		line = ansi.Truncate(line, w, "…")
+	}
+	fmt.Fprintf(s.out, "\r\x1b[K%s", line)
 }
 
 // clearLine erases the in-place status line. Caller must hold s.mu.
@@ -84,11 +113,14 @@ func (s *Status) Start(message string) {
 		return
 	}
 
+	s.started = true
 	s.running = true
 	s.frame = 0
 	s.stop = make(chan struct{})
 	s.stopped = make(chan struct{})
-	fmt.Fprint(s.out, "\x1b[?25l") // hide cursor while animating
+	// The cursor is deliberately left visible: hiding it would leave the
+	// user's terminal cursorless if the process dies mid-spin (Ctrl-C,
+	// panic), since nothing here owns signal handling.
 	s.render()
 
 	go func(stop, stopped chan struct{}) {
@@ -155,6 +187,15 @@ func (s *Status) finish(success bool, finalMessage string) {
 		return
 	}
 
+	// Only touch the terminal when a spinner is actually active: a stray
+	// Done/Fail without Start (or a duplicate) must not erase whatever is
+	// on the line now or repeat the final message.
+	if !s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = false
+
 	var stopped chan struct{}
 	if s.running {
 		s.running = false
@@ -171,7 +212,6 @@ func (s *Status) finish(success bool, finalMessage string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clearLine()
-	fmt.Fprint(s.out, "\x1b[?25h") // restore cursor
 	if finalMessage != "" {
 		styles := theme.Current().Styles()
 		sym := theme.Current().Symbols()
