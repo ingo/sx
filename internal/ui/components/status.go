@@ -38,6 +38,12 @@ type Status struct {
 	// Overridable in tests.
 	termWidth func() int
 
+	// Resolved once in Start: the first style resolution may query the
+	// terminal (see theme.detect), which must happen before painting
+	// begins, never from the animation goroutine.
+	styles  theme.Styles
+	symbols theme.Symbols
+
 	message string
 	frame   int
 	started bool
@@ -70,15 +76,16 @@ func terminalWidth(out io.Writer) int {
 
 // SetSilent enables silent mode (no output).
 func (s *Status) SetSilent(silent bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.silent = silent
 }
 
 // render writes the current spinner frame and message in place.
 // Caller must hold s.mu.
 func (s *Status) render() {
-	styles := theme.Current().Styles()
-	frame := styles.Spinner.Render(statusFrames[s.frame%len(statusFrames)])
-	line := frame + " " + styles.Muted.Render(s.message)
+	frame := s.styles.Spinner.Render(statusFrames[s.frame%len(statusFrames)])
+	line := frame + " " + s.styles.Muted.Render(s.message)
 	// Keep the line to a single row: in-place erasing (\r + EL) only
 	// covers the current row, so a wrapped line would leave residue.
 	if w := s.termWidth(); w > 0 {
@@ -102,6 +109,9 @@ func (s *Status) Start(message string) {
 	}
 
 	s.message = message
+	s.started = true
+	s.styles = theme.Current().Styles()
+	s.symbols = theme.Current().Symbols()
 
 	if s.noTTY {
 		fmt.Fprintf(s.out, "%s...", message)
@@ -113,7 +123,6 @@ func (s *Status) Start(message string) {
 		return
 	}
 
-	s.started = true
 	s.running = true
 	s.frame = 0
 	s.stop = make(chan struct{})
@@ -169,33 +178,32 @@ func (s *Status) Update(message string) {
 func (s *Status) finish(success bool, finalMessage string) {
 	s.mu.Lock()
 
-	if s.silent {
-		s.mu.Unlock()
-		return
-	}
-
-	if s.noTTY {
-		switch {
-		case finalMessage != "":
-			fmt.Fprintf(s.out, " %s\n", finalMessage)
-		case success:
-			fmt.Fprintln(s.out, " done")
-		default:
-			fmt.Fprintln(s.out, " failed")
-		}
-		s.mu.Unlock()
-		return
-	}
-
-	// Only touch the terminal when a spinner is actually active: a stray
-	// Done/Fail without Start (or a duplicate) must not erase whatever is
-	// on the line now or repeat the final message.
+	// Only act when a status is actually active: a stray Done/Fail without
+	// Start (or a duplicate) must not erase whatever is on the terminal
+	// line now, repeat the final message, or write to a pipe.
 	if !s.started {
 		s.mu.Unlock()
 		return
 	}
 	s.started = false
 
+	if s.noTTY {
+		if !s.silent {
+			switch {
+			case finalMessage != "":
+				fmt.Fprintf(s.out, " %s\n", finalMessage)
+			case success:
+				fmt.Fprintln(s.out, " done")
+			default:
+				fmt.Fprintln(s.out, " failed")
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	// Always tear down the animation goroutine, even in silent mode —
+	// silent gates output, not lifecycle.
 	var stopped chan struct{}
 	if s.running {
 		s.running = false
@@ -211,14 +219,14 @@ func (s *Status) finish(success bool, finalMessage string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// The painted line is cleared even when silent was enabled mid-run;
+	// only the final message counts as new output.
 	s.clearLine()
-	if finalMessage != "" {
-		styles := theme.Current().Styles()
-		sym := theme.Current().Symbols()
+	if finalMessage != "" && !s.silent {
 		if success {
-			fmt.Fprintln(s.out, styles.Success.Render(sym.Success+" "+finalMessage))
+			fmt.Fprintln(s.out, s.styles.Success.Render(s.symbols.Success+" "+finalMessage))
 		} else {
-			fmt.Fprintln(s.out, styles.Error.Render(sym.Error+" "+finalMessage))
+			fmt.Fprintln(s.out, s.styles.Error.Render(s.symbols.Error+" "+finalMessage))
 		}
 	}
 }
@@ -240,29 +248,19 @@ func (s *Status) Clear() {
 }
 
 // RunStatus runs a function while showing a status spinner.
-// The status line is cleared when the function completes.
-func RunStatus[T any](out io.Writer, message string, fn func() (T, error)) (T, error) {
-	noTTY := !ui.IsTTY(out)
-
-	if noTTY {
-		fmt.Fprintf(out, "%s... ", message)
-		result, err := fn()
-		if err != nil {
-			fmt.Fprintln(out, "failed")
-		} else {
-			fmt.Fprintln(out, "done")
-		}
-		return result, err
-	}
-
+// The status line is cleared when the function completes; teardown also
+// runs if fn panics.
+func RunStatus[T any](out io.Writer, message string, fn func() (T, error)) (result T, err error) {
 	s := NewStatus(out)
 	s.Start(message)
-	result, err := fn()
-	if err != nil {
-		s.Fail("")
-	} else {
-		s.Done("")
-	}
+	defer func() {
+		if err != nil {
+			s.Fail("")
+		} else {
+			s.Done("")
+		}
+	}()
+	result, err = fn()
 	return result, err
 }
 

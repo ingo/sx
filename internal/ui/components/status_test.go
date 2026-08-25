@@ -96,29 +96,51 @@ func TestStatusTTYFailShowsErrorMessage(t *testing.T) {
 	}
 }
 
-// TestStatusFinishWithoutStartIsNoOp: Done/Fail/Clear on a TTY status that
-// was never started must not write escape sequences over unrelated output.
+// TestStatusFinishWithoutStartIsNoOp: Done/Fail/Clear on a status that was
+// never started must not write anything — escape sequences on a TTY, or
+// stray " done"/" failed" lines on a pipe.
 func TestStatusFinishWithoutStartIsNoOp(t *testing.T) {
-	buf := &syncBuffer{}
-	s := newTTYStatus(buf)
-	s.Done("boom")
-	s.Fail("boom")
-	s.Clear()
-	if got := buf.String(); got != "" {
-		t.Errorf("finish without Start wrote %q, want nothing", got)
+	for _, tty := range []bool{true, false} {
+		buf := &syncBuffer{}
+		s := NewStatus(buf)
+		s.noTTY = !tty
+		s.Done("boom")
+		s.Fail("boom")
+		s.Clear()
+		if got := buf.String(); got != "" {
+			t.Errorf("tty=%v: finish without Start wrote %q, want nothing", tty, got)
+		}
 	}
 }
 
 // TestStatusDoubleDonePrintsFinalOnce: a duplicated Done must not erase the
-// terminal line again or repeat the final message.
+// terminal line again or repeat the final message, on either path.
 func TestStatusDoubleDonePrintsFinalOnce(t *testing.T) {
+	for _, tty := range []bool{true, false} {
+		buf := &syncBuffer{}
+		s := NewStatus(buf)
+		s.noTTY = !tty
+		s.Start("Working")
+		s.Done("all good")
+		s.Done("all good")
+		if n := strings.Count(buf.String(), "all good"); n != 1 {
+			t.Errorf("tty=%v: final message printed %d times, want 1\noutput: %q", tty, n, buf.String())
+		}
+	}
+}
+
+// TestStatusSilentAfterStartStopsAnimation: enabling silent mode mid-run
+// must not leak the animation goroutine — Done must still stop repaints.
+func TestStatusSilentAfterStartStopsAnimation(t *testing.T) {
 	buf := &syncBuffer{}
 	s := newTTYStatus(buf)
 	s.Start("Working")
-	s.Done("all good")
-	s.Done("all good")
-	if n := strings.Count(buf.String(), "all good"); n != 1 {
-		t.Errorf("final message printed %d times, want 1\noutput: %q", n, buf.String())
+	s.SetSilent(true)
+	s.Done("")
+	settled := len(buf.String())
+	time.Sleep(300 * time.Millisecond)
+	if got := len(buf.String()); got != settled {
+		t.Errorf("output grew from %d to %d bytes after Done — animation goroutine still running", settled, got)
 	}
 }
 
