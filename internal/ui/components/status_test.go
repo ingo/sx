@@ -132,7 +132,7 @@ func TestStatusTruncatesToTerminalWidth(t *testing.T) {
 	s.Start("this message is much longer than twenty columns")
 	s.Done("")
 
-	for _, seg := range strings.Split(buf.String(), "\r") {
+	for seg := range strings.SplitSeq(buf.String(), "\r") {
 		if w := visibleWidth(seg); w > 20 {
 			t.Errorf("rendered segment %q is %d cells wide, want <= 20", seg, w)
 		}
