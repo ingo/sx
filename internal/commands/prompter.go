@@ -30,7 +30,9 @@ type StdPrompter struct {
 // NewStdPrompter creates a new standard I/O prompter
 func NewStdPrompter(in io.Reader, out io.Writer) *StdPrompter {
 	return &StdPrompter{
-		in:  in,
+		// Wrap once so buffered lookahead survives across sequential
+		// prompts instead of being discarded with a per-call reader.
+		in:  bufio.NewReader(in),
 		out: out,
 	}
 }

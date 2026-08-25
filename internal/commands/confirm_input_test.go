@@ -66,6 +66,21 @@ func TestConfirmSelfUninstall(t *testing.T) {
 	}
 }
 
+func TestStdPrompterSequentialPromptsShareBufferedInput(t *testing.T) {
+	p := NewStdPrompter(strings.NewReader("Alice\ny\n"), &bytes.Buffer{})
+	name, err := p.Prompt("Name? ")
+	if err != nil || name != "Alice" {
+		t.Fatalf("first Prompt = %q, %v; want \"Alice\", nil", name, err)
+	}
+	ok, err := p.Confirm("Proceed?")
+	if err != nil {
+		t.Fatalf("Confirm returned error: %v", err)
+	}
+	if !ok {
+		t.Errorf("Confirm after Prompt = false, want true (second line lost to a discarded buffer)")
+	}
+}
+
 func TestStdPrompterConfirmWithStrayTerminalResponses(t *testing.T) {
 	p := NewStdPrompter(strings.NewReader(strayTerminalResponses+"y\n"), &bytes.Buffer{})
 	got, err := p.Confirm("Proceed?")
