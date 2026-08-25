@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
 )
 
@@ -33,15 +35,26 @@ func NewStdPrompter(in io.Reader, out io.Writer) *StdPrompter {
 	}
 }
 
-// Prompt displays a prompt and reads user input
-func (p *StdPrompter) Prompt(message string) (string, error) {
-	fmt.Fprint(p.out, message)
-	reader := bufio.NewReader(p.in)
+// readPromptLine reads one line of user input. Terminal replies to queries
+// (OSC 11 background color, DA1) that arrive after lipgloss's query timeout
+// are left unread in the tty input queue and end up prepended to the typed
+// line, so strip escape sequences before interpreting it (SK-762).
+func readPromptLine(in io.Reader) (string, error) {
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	response, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(response), nil
+	return strings.TrimSpace(ansi.Strip(response)), nil
+}
+
+// Prompt displays a prompt and reads user input
+func (p *StdPrompter) Prompt(message string) (string, error) {
+	fmt.Fprint(p.out, message)
+	return readPromptLine(p.in)
 }
 
 // PromptWithDefault displays a prompt with a default value

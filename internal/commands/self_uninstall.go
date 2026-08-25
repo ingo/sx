@@ -1,9 +1,9 @@
 package commands
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -160,7 +160,7 @@ func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 
 	// Confirm.
 	if !opts.Yes && !opts.skipConfirm {
-		if !confirmSelfUninstall(styledOut) {
+		if !confirmSelfUninstall(styledOut, os.Stdin) {
 			styledOut.Muted("Cancelled. Nothing was removed.")
 			return nil
 		}
@@ -274,14 +274,13 @@ func displayPath(path string, err error) string {
 }
 
 // confirmSelfUninstall prompts the user; default is No.
-func confirmSelfUninstall(styledOut *ui.Output) bool {
-	reader := bufio.NewReader(os.Stdin)
+func confirmSelfUninstall(styledOut *ui.Output, in io.Reader) bool {
 	styledOut.Printf("Continue with self-uninstall? [y/N]: ")
 
-	response, err := reader.ReadString('\n')
+	response, err := readPromptLine(in)
 	if err != nil {
 		return false
 	}
-	response = strings.ToLower(strings.TrimSpace(response))
+	response = strings.ToLower(response)
 	return response == "y" || response == "yes"
 }

@@ -1,9 +1,9 @@
 package commands
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,7 +219,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	}
 
 	if !opts.Yes && !opts.DryRun {
-		if !confirmUninstall(styledOut) {
+		if !confirmUninstall(styledOut, os.Stdin) {
 			styledOut.Muted("Uninstall cancelled")
 			return nil
 		}
@@ -261,7 +261,7 @@ func handleAllFlagWithoutAssets(ctx context.Context, opts UninstallOptions, styl
 
 	if !opts.Yes && !opts.DryRun {
 		styledOut.Info("System hooks will be removed (--all flag)")
-		if !confirmUninstall(styledOut) {
+		if !confirmUninstall(styledOut, os.Stdin) {
 			styledOut.Muted("Uninstall cancelled")
 			return nil
 		}
@@ -706,16 +706,15 @@ func displayUninstallPlan(plan UninstallPlan, styledOut *ui.Output) {
 }
 
 // confirmUninstall prompts user for confirmation
-func confirmUninstall(styledOut *ui.Output) bool {
-	reader := bufio.NewReader(os.Stdin)
+func confirmUninstall(styledOut *ui.Output, in io.Reader) bool {
 	styledOut.Printf("Continue with uninstall? [y/N]: ")
 
-	response, err := reader.ReadString('\n')
+	response, err := readPromptLine(in)
 	if err != nil {
 		return false
 	}
 
-	response = strings.ToLower(strings.TrimSpace(response))
+	response = strings.ToLower(response)
 	return response == "y" || response == "yes"
 }
 
