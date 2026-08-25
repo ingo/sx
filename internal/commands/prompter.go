@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -40,17 +41,28 @@ func NewStdPrompter(in io.Reader, out io.Writer) *StdPrompter {
 // readPromptLine reads one line of user input. Terminal replies to queries
 // (OSC 11 background color, DA1) that arrive after lipgloss's query timeout
 // are left unread in the tty input queue and end up prepended to the typed
-// line, so strip escape sequences before interpreting it (SK-762).
+// line, so strip escape sequences before interpreting it (SK-762). Bare
+// control bytes (e.g. a BEL terminator severed from its sequence when the
+// query timeout tears a reply in two) survive ansi.Strip, so drop those too.
 func readPromptLine(in io.Reader) (string, error) {
 	reader, ok := in.(*bufio.Reader)
 	if !ok {
 		reader = bufio.NewReader(in)
 	}
 	response, err := reader.ReadString('\n')
-	if err != nil {
+	// EOF with a partial line still carries the user's answer (e.g.
+	// `printf 'y' | sx uninstall`); only fail when nothing was read.
+	if err != nil && response == "" {
 		return "", err
 	}
-	return strings.TrimSpace(ansi.Strip(response)), nil
+	response = ansi.Strip(response)
+	response = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, response)
+	return strings.TrimSpace(response), nil
 }
 
 // Prompt displays a prompt and reads user input

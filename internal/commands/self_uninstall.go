@@ -160,7 +160,7 @@ func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 
 	// Confirm.
 	if !opts.Yes && !opts.skipConfirm {
-		if !confirmSelfUninstall(styledOut, os.Stdin) {
+		if !confirmSelfUninstall(styledOut, cmd.InOrStdin()) {
 			styledOut.Muted("Cancelled. Nothing was removed.")
 			return nil
 		}

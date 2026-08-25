@@ -33,6 +33,8 @@ func TestConfirmUninstall(t *testing.T) {
 		{"yes with stray terminal responses", strayTerminalResponses + "y\n", true},
 		{"no with stray terminal responses", strayTerminalResponses + "n\n", false},
 		{"only stray responses defaults to no", strayTerminalResponses + "\n", false},
+		{"yes with bare control residue from torn reply", "\x07y\n", true},
+		{"yes without trailing newline", "y", true},
 	}
 
 	for _, tt := range tests {
