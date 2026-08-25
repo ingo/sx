@@ -1,92 +1,21 @@
 package components
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"os"
-	"time"
-
-	"charm.land/bubbles/v2/spinner"
-	tea "charm.land/bubbletea/v2"
-
-	"github.com/sleuth-io/sx/v2/internal/ui"
-	"github.com/sleuth-io/sx/v2/internal/ui/theme"
 )
 
-// spinnerDoneMsg signals that the spinner task is complete.
-type spinnerDoneMsg struct {
-	err error
-}
-
-// spinnerModel is the bubbletea model for the spinner component.
-type spinnerModel struct {
-	spinner spinner.Model
-	message string
-	done    bool
-	err     error
-	styles  theme.Styles
-}
-
-func newSpinnerModel(message string) spinnerModel {
-	th := theme.Current()
-
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = th.Styles().Spinner
-
-	return spinnerModel{
-		spinner: s,
-		message: message,
-		// Resolve styles now: the first resolution may query the terminal,
-		// which must happen before bubbletea takes it over.
-		styles: th.Styles(),
-	}
-}
-
-func (m spinnerModel) Init() tea.Cmd {
-	return m.spinner.Tick
-}
-
-func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case spinnerDoneMsg:
-		m.done = true
-		m.err = msg.err
-		return m, tea.Quit
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.done = true
-			m.err = errors.New("cancelled")
-			return m, tea.Quit
-		}
-
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-func (m spinnerModel) View() tea.View {
-	if m.done {
-		return tea.NewView("")
-	}
-
-	return tea.NewView(m.spinner.View() + " " + m.styles.Muted.Render(m.message))
-}
-
-// Spinner displays a spinner with a message.
-// The spinner runs until Stop() is called on the returned Spinner.
+// Spinner displays an animated spinner with a message until stopped.
+//
+// Built on Status (plain in-place ANSI) rather than a bubbletea program:
+// bubbletea queries terminal capabilities at startup, and a short-lived
+// spinner exits before the terminal replies, leaking the reply bytes to the
+// user's terminal (SK-763). Delegating also removes the old implementation's
+// unsynchronized result read when the program quit while the wrapped
+// function was still running.
 type Spinner struct {
-	program *tea.Program
-	model   spinnerModel
-	out     io.Writer
-	noTTY   bool
+	status  *Status
+	message string
 }
 
 // NewSpinner creates a new spinner with the given message.
@@ -96,50 +25,32 @@ func NewSpinner(message string) *Spinner {
 
 // NewSpinnerWithOutput creates a new spinner with custom output.
 func NewSpinnerWithOutput(message string, out io.Writer) *Spinner {
-	noTTY := !ui.IsTTY(out)
-
 	return &Spinner{
-		model: newSpinnerModel(message),
-		out:   out,
-		noTTY: noTTY,
+		status:  NewStatus(out),
+		message: message,
 	}
 }
 
 // Start begins the spinner animation.
 func (s *Spinner) Start() {
-	if s.noTTY {
-		fmt.Fprintf(s.out, "%s...\n", s.model.message)
-		return
-	}
-
-	s.program = tea.NewProgram(s.model, tea.WithOutput(s.out))
-	go func() {
-		_, _ = s.program.Run()
-	}()
-
-	// Give the program time to start
-	time.Sleep(10 * time.Millisecond)
+	s.status.Start(s.message)
 }
 
-// Stop stops the spinner and optionally shows a result message.
+// Stop stops the spinner and clears the line.
 func (s *Spinner) Stop() {
-	if s.noTTY || s.program == nil {
-		return
-	}
-
-	s.program.Send(spinnerDoneMsg{})
-	// Give the program time to quit
-	time.Sleep(10 * time.Millisecond)
+	s.status.Clear()
 }
 
-// StopWithError stops the spinner and records an error.
-func (s *Spinner) StopWithError(err error) {
-	if s.noTTY || s.program == nil {
-		return
-	}
+// StopWithError stops the spinner and clears the line. The error is the
+// caller's to report; the spinner line itself carries no final message.
+func (s *Spinner) StopWithError(_ error) {
+	s.status.Fail("")
+}
 
-	s.program.Send(spinnerDoneMsg{err: err})
-	time.Sleep(10 * time.Millisecond)
+// UpdateMessage updates the spinner message (for long-running operations).
+func (s *Spinner) UpdateMessage(message string) {
+	s.message = message
+	s.status.Update(message)
 }
 
 // RunWithSpinner runs a function while showing a spinner.
@@ -148,44 +59,18 @@ func RunWithSpinner[T any](message string, fn func() (T, error)) (T, error) {
 	return RunWithSpinnerOutput(message, os.Stdout, fn)
 }
 
-// RunWithSpinnerOutput runs a function while showing a spinner on custom output.
-func RunWithSpinnerOutput[T any](message string, out io.Writer, fn func() (T, error)) (T, error) {
-	var result T
-	var fnErr error
-
-	// For non-TTY, just run the function
-	if !ui.IsTTY(out) {
-		fmt.Fprintf(out, "%s...\n", message)
-		return fn()
-	}
-
-	m := newSpinnerModel(message)
-	p := tea.NewProgram(m, tea.WithOutput(out))
-
-	// Run the function in a goroutine
-	go func() {
-		result, fnErr = fn()
-		p.Send(spinnerDoneMsg{err: fnErr})
+// RunWithSpinnerOutput runs a function while showing a spinner on custom
+// output. The spinner is torn down even if fn panics.
+func RunWithSpinnerOutput[T any](message string, out io.Writer, fn func() (T, error)) (result T, err error) {
+	s := NewStatus(out)
+	s.Start(message)
+	defer func() {
+		if err != nil {
+			s.Fail("")
+		} else {
+			s.Done("")
+		}
 	}()
-
-	// Run the spinner until done
-	if _, err := p.Run(); err != nil {
-		return result, fmt.Errorf("spinner failed: %w", err)
-	}
-
-	return result, fnErr
-}
-
-// SpinnerMessage updates the spinner message (for long-running operations).
-type spinnerMsgUpdate struct {
-	message string
-}
-
-// UpdateMessage sends a message update to the spinner.
-func (s *Spinner) UpdateMessage(message string) {
-	if s.noTTY || s.program == nil {
-		fmt.Fprintf(s.out, "%s...\n", message)
-		return
-	}
-	s.program.Send(spinnerMsgUpdate{message: message})
+	result, err = fn()
+	return result, err
 }

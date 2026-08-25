@@ -3,125 +3,100 @@ package components
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"charm.land/bubbles/v2/spinner"
-	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 
 	"github.com/sleuth-io/sx/v2/internal/ui"
 	"github.com/sleuth-io/sx/v2/internal/ui/theme"
 )
 
-// statusUpdateMsg updates the status message.
-type statusUpdateMsg struct {
-	message string
-}
+// statusFrames are the spinner animation frames (same glyphs as the
+// charmbracelet Dot spinner previously used here).
+var statusFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
-// statusDoneMsg signals status is complete.
-type statusDoneMsg struct {
-	success bool
-	message string
-}
-
-// statusModel is the bubbletea model for the status line.
-type statusModel struct {
-	spinner spinner.Model
-	message string
-	done    bool
-	success bool
-	final   string
-	theme   theme.Theme
-	styles  theme.Styles
-}
-
-func newStatusModel(message string) statusModel {
-	th := theme.Current()
-
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = th.Styles().Spinner
-
-	return statusModel{
-		spinner: s,
-		message: message,
-		theme:   th,
-		// Resolve styles now: the first resolution may query the terminal,
-		// which must happen before bubbletea takes it over.
-		styles: th.Styles(),
-	}
-}
-
-func (m statusModel) Init() tea.Cmd {
-	return m.spinner.Tick
-}
-
-func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case statusUpdateMsg:
-		m.message = msg.message
-		return m, nil
-
-	case statusDoneMsg:
-		m.done = true
-		m.success = msg.success
-		m.final = msg.message
-		return m, tea.Quit
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.done = true
-			return m, tea.Quit
-		}
-
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-func (m statusModel) View() tea.View {
-	if m.done {
-		if m.final != "" {
-			sym := m.theme.Symbols()
-			if m.success {
-				return tea.NewView(m.styles.Success.Render(sym.Success+" "+m.final) + "\n")
-			}
-			return tea.NewView(m.styles.Error.Render(sym.Error+" "+m.final) + "\n")
-		}
-		return tea.NewView("")
-	}
-
-	return tea.NewView(m.spinner.View() + " " + m.styles.Muted.Render(m.message))
-}
+const statusFrameInterval = 100 * time.Millisecond
 
 // Status provides a transient status line that updates in place.
 // Use for operations where you want to show progress without cluttering output.
+//
+// Rendered with plain ANSI writes rather than a bubbletea program: bubbletea
+// queries the terminal for capabilities at startup, and for a short-lived
+// status the replies arrive after the program has exited and restored echo,
+// so they end up printed to the user's terminal as garbage (SK-763).
 type Status struct {
-	program *tea.Program
-	out     io.Writer
-	noTTY   bool
-	mu      sync.Mutex
+	out    io.Writer
+	noTTY  bool
+	mu     sync.Mutex
+	silent bool
+
+	// termWidth reports the terminal width in cells (0 = unknown).
+	// Overridable in tests.
+	termWidth func() int
+
+	// Resolved once in Start: the first style resolution may query the
+	// terminal (see theme.detect), which must happen before painting
+	// begins, never from the animation goroutine.
+	styles  theme.Styles
+	symbols theme.Symbols
+
 	message string
-	silent  bool
+	frame   int
+	started bool
+	running bool
+	stop    chan struct{}
+	stopped chan struct{}
 }
 
 // NewStatus creates a new status line.
 func NewStatus(out io.Writer) *Status {
 	return &Status{
-		out:   out,
-		noTTY: !ui.IsTTY(out),
+		out:       out,
+		noTTY:     !ui.IsTTY(out),
+		termWidth: func() int { return terminalWidth(out) },
 	}
+}
+
+// terminalWidth returns the terminal width for out, or 0 if unknown.
+func terminalWidth(out io.Writer) int {
+	f, ok := out.(*os.File)
+	if !ok {
+		return 0
+	}
+	w, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || w <= 0 {
+		return 0
+	}
+	return w
 }
 
 // SetSilent enables silent mode (no output).
 func (s *Status) SetSilent(silent bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.silent = silent
+}
+
+// render writes the current spinner frame and message in place.
+// Caller must hold s.mu.
+func (s *Status) render() {
+	frame := s.styles.Spinner.Render(statusFrames[s.frame%len(statusFrames)])
+	line := frame + " " + s.styles.Muted.Render(s.message)
+	// Keep the line to a single row: in-place erasing (\r + EL) only
+	// covers the current row, so a wrapped line would leave residue.
+	if w := s.termWidth(); w > 0 {
+		line = ansi.Truncate(line, w, "…")
+	}
+	fmt.Fprintf(s.out, "\r\x1b[K%s", line)
+}
+
+// clearLine erases the in-place status line. Caller must hold s.mu.
+func (s *Status) clearLine() {
+	fmt.Fprint(s.out, "\r\x1b[K")
 }
 
 // Start begins showing a status with spinner.
@@ -134,20 +109,47 @@ func (s *Status) Start(message string) {
 	}
 
 	s.message = message
+	s.started = true
+	s.styles = theme.Current().Styles()
+	s.symbols = theme.Current().Symbols()
 
 	if s.noTTY {
 		fmt.Fprintf(s.out, "%s...", message)
 		return
 	}
 
-	m := newStatusModel(message)
-	s.program = tea.NewProgram(m, tea.WithOutput(s.out))
+	if s.running {
+		s.render()
+		return
+	}
 
-	go func() {
-		_, _ = s.program.Run()
-	}()
+	s.running = true
+	s.frame = 0
+	s.stop = make(chan struct{})
+	s.stopped = make(chan struct{})
+	// The cursor is deliberately left visible: hiding it would leave the
+	// user's terminal cursorless if the process dies mid-spin (Ctrl-C,
+	// panic), since nothing here owns signal handling.
+	s.render()
 
-	time.Sleep(10 * time.Millisecond)
+	go func(stop, stopped chan struct{}) {
+		defer close(stopped)
+		ticker := time.NewTicker(statusFrameInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				s.mu.Lock()
+				if s.running {
+					s.frame++
+					s.render()
+				}
+				s.mu.Unlock()
+			}
+		}
+	}(s.stop, s.stopped)
 }
 
 // Update changes the status message.
@@ -166,54 +168,78 @@ func (s *Status) Update(message string) {
 		return
 	}
 
-	if s.program != nil {
-		s.program.Send(statusUpdateMsg{message: message})
+	if s.running {
+		s.render()
+	}
+}
+
+// finish stops the animation and replaces the status line with an optional
+// final message.
+func (s *Status) finish(success bool, finalMessage string) {
+	s.mu.Lock()
+
+	// Only act when a status is actually active: a stray Done/Fail without
+	// Start (or a duplicate) must not erase whatever is on the terminal
+	// line now, repeat the final message, or write to a pipe.
+	if !s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = false
+
+	if s.noTTY {
+		if !s.silent {
+			switch {
+			case finalMessage != "":
+				fmt.Fprintf(s.out, " %s\n", finalMessage)
+			case success:
+				fmt.Fprintln(s.out, " done")
+			default:
+				fmt.Fprintln(s.out, " failed")
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	// Always tear down the animation goroutine, even in silent mode —
+	// silent gates output, not lifecycle.
+	var stopped chan struct{}
+	if s.running {
+		s.running = false
+		close(s.stop)
+		stopped = s.stopped
+	}
+	s.mu.Unlock()
+
+	// Wait outside the lock so the animation goroutine can exit.
+	if stopped != nil {
+		<-stopped
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The painted line is cleared even when silent was enabled mid-run;
+	// only the final message counts as new output.
+	s.clearLine()
+	if finalMessage != "" && !s.silent {
+		if success {
+			fmt.Fprintln(s.out, s.styles.Success.Render(s.symbols.Success+" "+finalMessage))
+		} else {
+			fmt.Fprintln(s.out, s.styles.Error.Render(s.symbols.Error+" "+finalMessage))
+		}
 	}
 }
 
 // Done completes the status with an optional final message.
 // If finalMessage is empty, the status line is cleared.
 func (s *Status) Done(finalMessage string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.silent {
-		return
-	}
-
-	if s.noTTY {
-		if finalMessage != "" {
-			fmt.Fprintf(s.out, " %s\n", finalMessage)
-		} else {
-			fmt.Fprintln(s.out, " done")
-		}
-		return
-	}
-
-	if s.program != nil {
-		s.program.Send(statusDoneMsg{success: true, message: finalMessage})
-		time.Sleep(20 * time.Millisecond)
-	}
+	s.finish(true, finalMessage)
 }
 
 // Fail completes the status with an error message.
 func (s *Status) Fail(message string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.silent {
-		return
-	}
-
-	if s.noTTY {
-		fmt.Fprintf(s.out, " %s\n", message)
-		return
-	}
-
-	if s.program != nil {
-		s.program.Send(statusDoneMsg{success: false, message: message})
-		time.Sleep(20 * time.Millisecond)
-	}
+	s.finish(false, message)
 }
 
 // Clear clears the status line without showing a final message.
@@ -222,42 +248,20 @@ func (s *Status) Clear() {
 }
 
 // RunStatus runs a function while showing a status spinner.
-// Shows a success/fail message based on the result.
-func RunStatus[T any](out io.Writer, message string, fn func() (T, error)) (T, error) {
-	var result T
-
-	noTTY := !ui.IsTTY(out)
-
-	if noTTY {
-		fmt.Fprintf(out, "%s... ", message)
-		result, err := fn()
+// The status line is cleared when the function completes; teardown also
+// runs if fn panics.
+func RunStatus[T any](out io.Writer, message string, fn func() (T, error)) (result T, err error) {
+	s := NewStatus(out)
+	s.Start(message)
+	defer func() {
 		if err != nil {
-			fmt.Fprintln(out, "failed")
+			s.Fail("")
 		} else {
-			fmt.Fprintln(out, "done")
-		}
-		return result, err
-	}
-
-	m := newStatusModel(message)
-	p := tea.NewProgram(m, tea.WithOutput(out))
-
-	var fnErr error
-
-	go func() {
-		result, fnErr = fn()
-		if fnErr != nil {
-			p.Send(statusDoneMsg{success: false, message: ""})
-		} else {
-			p.Send(statusDoneMsg{success: true, message: ""})
+			s.Done("")
 		}
 	}()
-
-	if _, err := p.Run(); err != nil {
-		return result, fmt.Errorf("status failed: %w", err)
-	}
-
-	return result, fnErr
+	result, err = fn()
+	return result, err
 }
 
 // StatusLine is a simpler non-animated status that updates in place.
