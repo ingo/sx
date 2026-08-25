@@ -144,7 +144,10 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	out := newOutputHelper(cmd)
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 	// One buffered reader for every prompt in this run, from cobra's input
-	// so tests can drive confirmation via cmd.SetIn.
+	// so tests can drive confirmation via cmd.SetIn. out.prompter wraps the
+	// same input separately but is never used on this path — route any new
+	// prompt through this reader, not the prompter, or lookahead can be
+	// split between the two buffers.
 	stdin := bufio.NewReader(cmd.InOrStdin())
 
 	// Step 1: Load lock file

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -121,6 +122,8 @@ func resolveSelfUninstallPaths() selfUninstallPaths {
 
 func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	// One buffered reader for every prompt in this run (see runUninstall).
+	stdin := bufio.NewReader(cmd.InOrStdin())
 
 	// --force only matters during asset cleanup; with --keep-assets that step
 	// is skipped entirely, so the combination is a silent no-op. Reject it
@@ -160,7 +163,7 @@ func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 
 	// Confirm.
 	if !opts.Yes && !opts.skipConfirm {
-		if !confirmSelfUninstall(styledOut, cmd.InOrStdin()) {
+		if !confirmSelfUninstall(styledOut, stdin) {
 			styledOut.Muted("Cancelled. Nothing was removed.")
 			return nil
 		}

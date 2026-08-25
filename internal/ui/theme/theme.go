@@ -50,6 +50,13 @@ func detect() {
 		if profile >= colorprofile.ANSI &&
 			isTTY(os.Stdin) && isTTY(os.Stdout) &&
 			isForeground() {
+			// TODO(SK-762): replies arriving after this query's timeout are
+			// left in the tty input queue. commands.readPromptLine strips
+			// whole sequences and control bytes from later reads, but a reply
+			// torn mid-sequence by the timeout leaves printable residue no
+			// read-site filter can distinguish from typed input. Draining
+			// here races with reply arrival, so the residual case is
+			// accepted until lipgloss offers a synchronous drain.
 			darkBG = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 		}
 	})

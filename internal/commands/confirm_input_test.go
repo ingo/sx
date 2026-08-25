@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,6 +64,55 @@ func TestConfirmSelfUninstall(t *testing.T) {
 			got := confirmSelfUninstall(discardOutput(), strings.NewReader(tt.input))
 			if got != tt.want {
 				t.Errorf("confirmSelfUninstall(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// setupUninstallSandbox isolates HOME/config/cache so the uninstall command
+// finds no config, which with --all routes through handleAllFlagWithoutAssets
+// and its confirmation prompt.
+func setupUninstallSandbox(t *testing.T) {
+	t.Helper()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(homeDir, ".cache"))
+	t.Setenv("SX_CONFIG_DIR", filepath.Join(homeDir, ".config", "sx"))
+	t.Setenv("SX_CACHE_DIR", filepath.Join(homeDir, ".cache", "sx"))
+}
+
+// TestUninstallCommandReadsConfirmationFromCommandInput pins the cobra
+// wiring: the confirmation must read from cmd.SetIn (not os.Stdin) and
+// tolerate stray terminal replies before the typed answer.
+func TestUninstallCommandReadsConfirmationFromCommandInput(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantCancelled bool
+	}{
+		{"stray responses then yes proceeds", strayTerminalResponses + "y\n", false},
+		{"stray responses then no cancels", strayTerminalResponses + "n\n", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupUninstallSandbox(t)
+
+			cmd := NewUninstallCommand()
+			var out, errOut bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errOut)
+			cmd.SetIn(strings.NewReader(tt.input))
+			cmd.SetArgs([]string{"--all"})
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute returned error: %v\nstdout: %s\nstderr: %s", err, out.String(), errOut.String())
+			}
+
+			cancelled := strings.Contains(out.String(), "Uninstall cancelled")
+			if cancelled != tt.wantCancelled {
+				t.Errorf("cancelled = %v, want %v\nstdout: %s", cancelled, tt.wantCancelled, out.String())
 			}
 		})
 	}
