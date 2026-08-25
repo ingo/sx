@@ -147,7 +147,14 @@ func Confirm(message string, defaultYes bool) (bool, error) {
 
 // ConfirmWithIO displays an interactive confirmation prompt using custom IO.
 func ConfirmWithIO(message string, defaultYes bool, in io.Reader, out io.Writer) (bool, error) {
-	// Fall back to simple prompt for non-TTY
+	// Fall back to simple prompt for non-TTY.
+	//
+	// The raw ReadString in confirmSimple (and the equivalent fallbacks in
+	// input.go, select.go, multiselect.go) is only safe because this non-TTY
+	// guard matches the one in theme.detect(): terminal queries (OSC 11/DA1)
+	// are never issued without a TTY on both ends, so no stray replies can
+	// pollute stdin here. If either guard is relaxed, these readers need the
+	// escape-stripping treatment from SK-762 (see commands.readPromptLine).
 	if !ui.IsStdoutTTY() || !ui.IsStdinTTY() {
 		return confirmSimple(message, defaultYes, in, out)
 	}

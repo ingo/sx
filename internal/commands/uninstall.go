@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +143,12 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 
 	out := newOutputHelper(cmd)
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	// One buffered reader for every prompt in this run, from cobra's input
+	// so tests can drive confirmation via cmd.SetIn. out.prompter wraps the
+	// same input separately but is never used on this path — route any new
+	// prompt through this reader, not the prompter, or lookahead can be
+	// split between the two buffers.
+	stdin := bufio.NewReader(cmd.InOrStdin())
 
 	// Step 1: Load lock file
 	lockFile, err := loadLockFileForUninstall(ctx, out)
@@ -149,7 +156,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 		// If --all is passed, we should still remove system hooks even if lock file fails
 		if opts.All {
 			styledOut.Warning(fmt.Sprintf("Warning: %v", err))
-			return handleAllFlagWithoutAssets(ctx, opts, styledOut)
+			return handleAllFlagWithoutAssets(ctx, opts, styledOut, stdin)
 		}
 		return err
 	}
@@ -160,7 +167,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 		// If --all is passed, we should still remove system hooks even if tracker fails
 		if opts.All {
 			styledOut.Warning(fmt.Sprintf("Warning: %v", err))
-			return handleAllFlagWithoutAssets(ctx, opts, styledOut)
+			return handleAllFlagWithoutAssets(ctx, opts, styledOut, stdin)
 		}
 		return err
 	}
@@ -168,7 +175,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	if len(tracker.Assets) == 0 {
 		// No assets, but if --all is passed, still remove system hooks
 		if opts.All {
-			return handleAllFlagWithoutAssets(ctx, opts, styledOut)
+			return handleAllFlagWithoutAssets(ctx, opts, styledOut, stdin)
 		}
 		styledOut.Info("No assets installed")
 		return nil
@@ -192,7 +199,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	if len(plan.Assets) == 0 {
 		// No assets to uninstall, but if --all is passed, still remove system hooks
 		if opts.All {
-			return handleAllFlagWithoutAssets(ctx, opts, styledOut)
+			return handleAllFlagWithoutAssets(ctx, opts, styledOut, stdin)
 		}
 		if !gitContext.IsRepo {
 			styledOut.Info("Not in a repository. Use --all to uninstall from all scopes.")
@@ -219,7 +226,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	}
 
 	if !opts.Yes && !opts.DryRun {
-		if !confirmUninstall(styledOut) {
+		if !confirmUninstall(styledOut, stdin) {
 			styledOut.Muted("Uninstall cancelled")
 			return nil
 		}
@@ -256,12 +263,12 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 }
 
 // handleAllFlagWithoutAssets handles the --all flag when there are no assets to uninstall
-func handleAllFlagWithoutAssets(ctx context.Context, opts UninstallOptions, styledOut *ui.Output) error {
+func handleAllFlagWithoutAssets(ctx context.Context, opts UninstallOptions, styledOut *ui.Output, stdin io.Reader) error {
 	styledOut.Info("No assets to uninstall")
 
 	if !opts.Yes && !opts.DryRun {
 		styledOut.Info("System hooks will be removed (--all flag)")
-		if !confirmUninstall(styledOut) {
+		if !confirmUninstall(styledOut, stdin) {
 			styledOut.Muted("Uninstall cancelled")
 			return nil
 		}
@@ -706,16 +713,15 @@ func displayUninstallPlan(plan UninstallPlan, styledOut *ui.Output) {
 }
 
 // confirmUninstall prompts user for confirmation
-func confirmUninstall(styledOut *ui.Output) bool {
-	reader := bufio.NewReader(os.Stdin)
+func confirmUninstall(styledOut *ui.Output, in io.Reader) bool {
 	styledOut.Printf("Continue with uninstall? [y/N]: ")
 
-	response, err := reader.ReadString('\n')
+	response, err := readPromptLine(in)
 	if err != nil {
 		return false
 	}
 
-	response = strings.ToLower(strings.TrimSpace(response))
+	response = confirmAnswer(response)
 	return response == "y" || response == "yes"
 }
 

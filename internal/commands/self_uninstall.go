@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -121,6 +121,8 @@ func resolveSelfUninstallPaths() selfUninstallPaths {
 
 func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	// One buffered reader for every prompt in this run (see runUninstall).
+	stdin := bufio.NewReader(cmd.InOrStdin())
 
 	// --force only matters during asset cleanup; with --keep-assets that step
 	// is skipped entirely, so the combination is a silent no-op. Reject it
@@ -160,7 +162,7 @@ func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 
 	// Confirm.
 	if !opts.Yes && !opts.skipConfirm {
-		if !confirmSelfUninstall(styledOut) {
+		if !confirmSelfUninstall(styledOut, stdin) {
 			styledOut.Muted("Cancelled. Nothing was removed.")
 			return nil
 		}
@@ -274,14 +276,13 @@ func displayPath(path string, err error) string {
 }
 
 // confirmSelfUninstall prompts the user; default is No.
-func confirmSelfUninstall(styledOut *ui.Output) bool {
-	reader := bufio.NewReader(os.Stdin)
+func confirmSelfUninstall(styledOut *ui.Output, in io.Reader) bool {
 	styledOut.Printf("Continue with self-uninstall? [y/N]: ")
 
-	response, err := reader.ReadString('\n')
+	response, err := readPromptLine(in)
 	if err != nil {
 		return false
 	}
-	response = strings.ToLower(strings.TrimSpace(response))
+	response = confirmAnswer(response)
 	return response == "y" || response == "yes"
 }
