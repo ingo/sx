@@ -88,6 +88,7 @@ func (s *Status) Start(message string) {
 	s.frame = 0
 	s.stop = make(chan struct{})
 	s.stopped = make(chan struct{})
+	fmt.Fprint(s.out, "\x1b[?25l") // hide cursor while animating
 	s.render()
 
 	go func(stop, stopped chan struct{}) {
@@ -142,10 +143,13 @@ func (s *Status) finish(success bool, finalMessage string) {
 	}
 
 	if s.noTTY {
-		if finalMessage != "" {
+		switch {
+		case finalMessage != "":
 			fmt.Fprintf(s.out, " %s\n", finalMessage)
-		} else {
+		case success:
 			fmt.Fprintln(s.out, " done")
+		default:
+			fmt.Fprintln(s.out, " failed")
 		}
 		s.mu.Unlock()
 		return
@@ -167,6 +171,7 @@ func (s *Status) finish(success bool, finalMessage string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clearLine()
+	fmt.Fprint(s.out, "\x1b[?25h") // restore cursor
 	if finalMessage != "" {
 		styles := theme.Current().Styles()
 		sym := theme.Current().Symbols()

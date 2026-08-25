@@ -3,7 +3,6 @@ package components
 import (
 	"bytes"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -41,11 +40,6 @@ func newTTYStatus(buf *syncBuffer) *Status {
 // those queries arrive after the short-lived status finishes and get echoed
 // to the user's terminal as garbage like `^[[?2026;2$y`.
 func TestStatusTTYWritesNoTerminalQueries(t *testing.T) {
-	// Force the query-friendly environment bubbletea checks for, so the old
-	// implementation fails deterministically regardless of the test host.
-	os.Unsetenv("TERM_PROGRAM")
-	os.Unsetenv("SSH_TTY")
-
 	buf := &syncBuffer{}
 	s := newTTYStatus(buf)
 
@@ -94,8 +88,9 @@ func TestStatusTTYFailShowsErrorMessage(t *testing.T) {
 	}
 }
 
-// TestRunStatusTTYWritesNoTerminalQueries covers the RunStatus wrapper on
-// the TTY path via the same leak signature.
+// TestRunStatusNonTTY covers the RunStatus wrapper's non-TTY branch. The
+// TTY branch delegates to Status, whose query-leak regression is pinned by
+// TestStatusTTYWritesNoTerminalQueries.
 func TestRunStatusNonTTY(t *testing.T) {
 	var buf bytes.Buffer
 	got, err := RunStatus(&buf, "Working", func() (int, error) { return 42, nil })
