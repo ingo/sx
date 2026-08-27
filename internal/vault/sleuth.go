@@ -70,11 +70,16 @@ type SleuthVault struct {
 	pathHandler     *PathSourceHandler
 	gitHandler      *GitSourceHandler
 
-	// Repository GID -> provider, fetched lazily by repoProvidersByID to
-	// host-qualify team repo slugs; guarded by repoProvidersMu.
-	repoProvidersMu      sync.Mutex
-	repoProviders        map[string]string
-	repoProvidersFetched bool
+	// Lazily fetched org repository listing (GID, owner/name, provider),
+	// shared by provider qualification and GID resolution so one paged
+	// OrgRepositories fetch serves both. orgRepoMisses negative-caches
+	// GIDs a fresh fetch failed to resolve so an unresolvable team repo
+	// can't force a re-pagination on every call. All guarded by orgReposMu;
+	// the rows slice is replaced wholesale on refresh, never mutated.
+	orgReposMu      sync.Mutex
+	orgRepos        []orgRepoRow
+	orgReposFetched bool
+	orgRepoMisses   map[string]struct{}
 }
 
 // refreshLockFileCache fetches a fresh lock file from the server and updates the local cache.

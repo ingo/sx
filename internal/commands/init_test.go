@@ -258,7 +258,7 @@ func TestInitNewProfilePreservesSharedConfig(t *testing.T) {
 	}
 
 	t.Setenv("SX_PROFILE", "newprof")
-	existingCfg, err := config.Load()
+	keepFrom, err := config.LoadMultiProfile()
 	if err != nil {
 		t.Fatalf("load existing config: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestInitNewProfilePreservesSharedConfig(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
-	if err := runInitNonInteractivePreservingClients(cmd, context.Background(), "path", "", "", vaultDir, nil, existingCfg); err != nil {
+	if err := runInitNonInteractivePreservingClients(cmd, context.Background(), "path", "", "", vaultDir, nil, keepFrom); err != nil {
 		t.Fatalf("init new profile: %v", err)
 	}
 

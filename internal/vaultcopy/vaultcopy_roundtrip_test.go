@@ -317,3 +317,39 @@ func skillZip(t *testing.T, name, ver string) []byte {
 	}
 	return buf.Bytes()
 }
+
+// A collection's "just for me" install belonging to another user must survive
+// the copy without tripping the destination's self-only rule — the engine's
+// trusted write covers collection installs the same as asset scopes.
+func TestCopy_ForeignUserScopeOnCollectionCopied(t *testing.T) {
+	mgmt.ResetActorCache()
+	ctx := context.Background()
+
+	src := newSeededVault(t)
+	dst := newEmptyVault(t)
+
+	if err := src.(vault.CollectionStore).SaveCollection(ctx, manifest.Collection{Name: "essentials"}); err != nil {
+		t.Fatalf("seed collection: %v", err)
+	}
+	if err := src.(vault.CollectionInstaller).SetCollectionInstallation(
+		vault.ContextWithTrustedScopeWrite(ctx), "essentials",
+		vault.InstallTarget{Kind: vault.InstallKindUser, User: "bob@example.com"},
+	); err != nil {
+		t.Fatalf("seed foreign user install: %v", err)
+	}
+
+	report, err := vaultcopy.Copy(ctx, src, dst, vaultcopy.Options{Collections: true})
+	if err != nil {
+		t.Fatalf("Copy: %v (warnings: %v)", err, report.Warnings)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "may only target the authenticated caller") {
+			t.Fatalf("copy tripped the self-only rule: %v", report.Warnings)
+		}
+	}
+	targets, present, err := dst.(vault.CollectionInstaller).CurrentCollectionInstallTargets(ctx, "essentials")
+	if err != nil || !present || len(targets) != 1 ||
+		targets[0].Kind != vault.InstallKindUser || targets[0].User != "bob@example.com" {
+		t.Fatalf("dst targets = %+v present=%v err=%v, want bob@example.com user target", targets, present, err)
+	}
+}

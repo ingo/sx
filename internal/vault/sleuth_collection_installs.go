@@ -82,11 +82,12 @@ func (s *SleuthVault) collectionInstallationInput(ctx context.Context, target In
 // repoGIDByIdentifier resolves a repository URL or owner/name slug to its
 // server GID via the org repository list.
 func (s *SleuthVault) repoGIDByIdentifier(ctx context.Context, identifier string) (string, error) {
-	repos, err := s.orgRepoGIDsByOwnerName(ctx)
+	key := trailingOwnerName(identifier)
+	repos, err := s.orgRepoGIDsByOwnerName(ctx, key)
 	if err != nil {
 		return "", err
 	}
-	if gid, ok := repos[trailingOwnerName(identifier)]; ok {
+	if gid, ok := repos[key]; ok {
 		return gid, nil
 	}
 	return "", fmt.Errorf("repository %q not found in this vault's organization", identifier)

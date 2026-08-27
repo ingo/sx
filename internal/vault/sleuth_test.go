@@ -1326,3 +1326,108 @@ func TestSleuthVault_CurrentInstallTargets_QualifiesRepoRows(t *testing.T) {
 		t.Fatalf("targets[1] = %+v, want path github.com/acme/mono [services/api]", targets[1])
 	}
 }
+
+// A team repo GID the org listing never returns must not force a full
+// re-pagination on every ListTeams call: the miss is negative-cached after
+// one fresh fetch, and the repo renders as a bare owner/name slug.
+func TestSleuthVault_ListTeams_UnresolvableRepoFetchesOnce(t *testing.T) {
+	teamsPage := func(map[string]any) any {
+		return map[string]any{
+			"organization": map[string]any{
+				"teams": map[string]any{
+					"nodes": []any{
+						map[string]any{
+							"id":           "team-1",
+							"name":         "platform",
+							"adminMembers": []any{},
+							"members":      map[string]any{"totalCount": 0, "nodes": []any{}},
+							"skillsRepositories": []any{
+								map[string]any{"repositoryId": "ghost", "owner": "org", "name": "ghost-repo"},
+							},
+						},
+					},
+					"totalCount": 1,
+					"pageInfo":   map[string]any{"hasNextPage": false, "endCursor": nil},
+				},
+			},
+		}
+	}
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListTeams": teamsPage,
+		"OrgRepositories": func(map[string]any) any {
+			return map[string]any{
+				"organization": map[string]any{
+					"repositories": map[string]any{
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+						"nodes": []any{
+							map[string]any{"id": "repo-9", "owner": "org", "name": "repo-9", "provider": "github"},
+						},
+					},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "token")
+	for i := range 2 {
+		result, err := v.ListTeams(context.Background(), ListTeamsOptions{Limit: 100})
+		if err != nil {
+			t.Fatalf("ListTeams #%d: %v", i+1, err)
+		}
+		if repos := result.Teams[0].Repositories; len(repos) != 1 || repos[0] != "org/ghost-repo" {
+			t.Fatalf("ListTeams #%d repositories = %v, want bare slug org/ghost-repo", i+1, repos)
+		}
+	}
+	fetches := 0
+	for _, r := range *records {
+		if r.OperationName == "OrgRepositories" {
+			fetches++
+		}
+	}
+	if fetches != 1 {
+		t.Fatalf("OrgRepositories fetched %d times across two ListTeams calls, want 1 (miss must be negative-cached)", fetches)
+	}
+}
+
+// The bulk write path must send skills.new the bare owner/name slug it
+// round-trips as entityName — CurrentInstallTargets now returns
+// host-qualified slugs, and forwarding those verbatim would hand the server
+// a form it never emitted.
+func TestSleuthVault_SetAssetInstallations_UnqualifiesRepoURL(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"SetAssetInstallations": func(map[string]any) any {
+			return map[string]any{
+				"setAssetInstallations": map[string]any{
+					"errors": []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "token")
+	skipped, err := v.SetAssetInstallations(context.Background(), "my-skill", []InstallTarget{
+		{Kind: InstallKindRepo, Repo: "github.com/acme/tools"},
+		{Kind: InstallKindPath, Repo: "bitbucket.org/acme/mono", Paths: []string{"services/api"}},
+		{Kind: InstallKindRepo, Repo: "https://github.com/acme/urlform"},
+	}, false)
+	if err != nil || len(skipped) != 0 {
+		t.Fatalf("SetAssetInstallations: err=%v skipped=%+v", err, skipped)
+	}
+
+	set := findRecord(t, *records, "SetAssetInstallations")
+	input := set.Variables["input"].(map[string]any)
+	repos := input["repositories"].([]any)
+	if len(repos) != 3 {
+		t.Fatalf("repositories = %v, want 3", repos)
+	}
+	if url := repos[0].(map[string]any)["url"]; url != "acme/tools" {
+		t.Errorf("repo url = %v, want bare slug acme/tools", url)
+	}
+	if url := repos[1].(map[string]any)["url"]; url != "acme/mono" {
+		t.Errorf("path repo url = %v, want bare slug acme/mono", url)
+	}
+	// A user-typed full URL is not our qualification — it passes through.
+	if url := repos[2].(map[string]any)["url"]; url != "https://github.com/acme/urlform" {
+		t.Errorf("url-form repo url = %v, want passthrough", url)
+	}
+}

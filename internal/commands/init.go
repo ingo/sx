@@ -25,15 +25,18 @@ import (
 )
 
 // runInitNonInteractivePreservingClients runs the non-interactive init and,
-// when preserveFrom is non-nil (an existing config, and no --clients flag was
-// given), restores that config's client enable/disable lists afterwards. The
-// init save paths rebuild those lists from the (empty) selection, so without
-// the restore a non-interactive `sx init` — e.g. one creating a new profile
-// via SX_PROFILE — would silently re-enable every force-disabled client. An
-// explicit selection (a --clients flag, including "all") passes preserveFrom
-// nil so the rebuilt lists win.
-func runInitNonInteractivePreservingClients(cmd *cobra.Command, ctx context.Context, repoType, serverURL, repoURL, pathFlag string, enabledClients []string, preserveFrom *config.Config) error {
-	keep := enabledClients == nil && preserveFrom != nil
+// when keepFrom is non-nil (a pre-existing config snapshot, taken because no
+// --clients flag was given), restores its config-wide client enable/disable
+// lists afterwards. The init save paths rebuild those lists from the (empty)
+// selection, so without the restore a non-interactive `sx init` — e.g. one
+// creating a new profile via SX_PROFILE — would silently re-enable every
+// force-disabled client. An explicit selection (a --clients flag, including
+// "all") passes keepFrom nil so the rebuilt lists win. The snapshot is a
+// MultiProfileConfig rather than a resolved profile Config: the lists are
+// config-wide, and per-profile resolution can fail (dangling defaultProfile)
+// even when the lists themselves are perfectly readable.
+func runInitNonInteractivePreservingClients(cmd *cobra.Command, ctx context.Context, repoType, serverURL, repoURL, pathFlag string, enabledClients []string, keepFrom *config.MultiProfileConfig) error {
+	keep := enabledClients == nil && keepFrom != nil
 	if err := runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients); err != nil {
 		return err
 	}
@@ -44,8 +47,8 @@ func runInitNonInteractivePreservingClients(cmd *cobra.Command, ctx context.Cont
 	if err != nil {
 		return err
 	}
-	mpc.ForceEnabledClients = preserveFrom.ForceEnabledClients
-	mpc.ForceDisabledClients = preserveFrom.ForceDisabledClients
+	mpc.ForceEnabledClients = keepFrom.ForceEnabledClients
+	mpc.ForceDisabledClients = keepFrom.ForceDisabledClients
 	return config.SaveMultiProfile(mpc)
 }
 
@@ -152,11 +155,11 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL, pa
 		enabledClients = flagClients
 		// An explicit --clients (including "all") is a client selection; only
 		// an absent flag preserves the existing enable/disable state.
-		var preserveFrom *config.Config
+		var keepFrom *config.MultiProfileConfig
 		if clientsFlag == "" {
-			preserveFrom = existingCfg
+			keepFrom, _ = config.LoadMultiProfile()
 		}
-		err = runInitNonInteractivePreservingClients(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients, preserveFrom)
+		err = runInitNonInteractivePreservingClients(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients, keepFrom)
 	} else {
 		enabledClients, err = runInitInteractive(cmd, ctx, existingCfg, flagClients)
 	}
@@ -900,6 +903,12 @@ func promptBootstrapOptions(cmd *cobra.Command, ctx context.Context, enabledClie
 	for _, client := range installedClients {
 		// Skip if not in enabled set (when set is defined)
 		if enabledSet != nil && !enabledSet[client.ID()] {
+			continue
+		}
+		// Even with no explicit selection, ignore force-disabled clients —
+		// mirrors the hook-installation guard so both paths agree on what
+		// "disabled" means.
+		if enabledSet == nil && !cfg.IsClientEnabled(client.ID()) {
 			continue
 		}
 		if clientOpts := client.GetBootstrapOptions(ctx); clientOpts != nil {

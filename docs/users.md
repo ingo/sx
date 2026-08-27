@@ -46,6 +46,11 @@ The check runs inside the vault mutation transaction, after the flock
 + manifest reload — not just in the CLI — so it cannot be bypassed by
 racing two processes.
 
+One deliberate exception: `sx vault copy` replicates a source vault's
+existing scopes verbatim, so its bulk writes carry user scopes for
+other users (the scope was already valid in the source — faithful
+migration, not escalation). No interactive command gets this bypass.
+
 The Sleuth vault does not apply this restriction; it gates user-scoped
 installs on the server-side `INSTALL_SELF` permission instead (see
 above), which permits targeting other org users.

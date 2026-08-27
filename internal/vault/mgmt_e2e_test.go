@@ -1273,3 +1273,44 @@ func TestRemoveTeamMember_SelfRemoval(t *testing.T) {
 		t.Fatalf("non-admin removing another member should be denied, got %v", err)
 	}
 }
+
+// Collection installs get the same trusted-write exception as asset scopes:
+// vault copy replicates the source's rows, so a "just for me" install
+// belonging to another user must survive, while untrusted writes still
+// enforce the self-only rule.
+func TestPathVault_TrustedSetCollectionInstallationAllowsForeignUser(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice Admin")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Collections:   []manifest.Collection{{Name: "essentials"}},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault failed: %v", err)
+	}
+	ctx := context.Background()
+	foreign := InstallTarget{Kind: InstallKindUser, User: "bob@example.com"}
+
+	err = v.SetCollectionInstallation(ctx, "essentials", foreign)
+	if err == nil || !strings.Contains(err.Error(), "may only target the authenticated caller") {
+		t.Fatalf("untrusted collection install for a non-caller: err=%v, want self-only rejection", err)
+	}
+
+	if err := v.SetCollectionInstallation(ContextWithTrustedScopeWrite(ctx), "essentials", foreign); err != nil {
+		t.Fatalf("trusted collection install: %v", err)
+	}
+	targets, present, err := v.CurrentCollectionInstallTargets(ctx, "essentials")
+	if err != nil || !present || len(targets) != 1 ||
+		targets[0].Kind != InstallKindUser || targets[0].User != "bob@example.com" {
+		t.Fatalf("targets = %+v present=%v err=%v, want bob@example.com user target", targets, present, err)
+	}
+}

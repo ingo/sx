@@ -110,13 +110,69 @@ func gqlTeamNodeToSleuthNode(n vaultgql.ListTeamsOrganizationOrganizationTypeTea
 	return node
 }
 
-// repoProvidersByID returns the org's repository GID -> provider map, fetched
-// lazily and only when some team actually carries repositories
-// (skillsRepositories expose no provider of their own). The map is cached on
-// the vault instance; a cached map that doesn't cover every team repo GID —
-// a repository connected after the first fetch, in a long-lived process —
-// triggers one refetch. A fetch failure degrades to bare owner/name slugs
-// rather than failing the listing.
+// orgRepoRow is one repository from the org's paged OrgRepositories listing,
+// carrying everything both consumers need: GID resolution for team-repo
+// mutations and provider lookup for host-qualifying repo slugs.
+type orgRepoRow struct {
+	GID       string
+	OwnerName string // lowercase "owner/name"
+	Provider  string
+}
+
+// fetchOrgRepos pages the whole OrgRepositories connection once.
+func (s *SleuthVault) fetchOrgRepos(ctx context.Context) ([]orgRepoRow, error) {
+	const pageSize = 50
+	var rows []orgRepoRow
+	var after *string
+	for {
+		resp, err := vaultgql.OrgRepositories(ctx, s.gqlClient(), pageSize, after)
+		if err != nil {
+			return nil, err
+		}
+		conn := resp.Organization.Repositories
+		for _, n := range conn.Nodes {
+			if n.Id == nil {
+				continue
+			}
+			rows = append(rows, orgRepoRow{
+				GID:       *n.Id,
+				OwnerName: strings.ToLower(n.Owner + "/" + n.Name),
+				Provider:  n.Provider,
+			})
+		}
+		if !conn.PageInfo.HasNextPage || conn.PageInfo.EndCursor == nil {
+			return rows, nil
+		}
+		after = conn.PageInfo.EndCursor
+	}
+}
+
+// orgRepoRows returns the cached org repository listing, fetching it on
+// first use (or when refresh forces a refetch, used by callers that missed a
+// lookup and must rule out staleness). fresh reports whether the returned
+// rows come from a fetch this call performed. On a fetch failure the
+// previously cached rows are returned alongside the error so callers can
+// degrade instead of losing data they already had.
+func (s *SleuthVault) orgRepoRows(ctx context.Context, refresh bool) (rows []orgRepoRow, fresh bool, err error) {
+	s.orgReposMu.Lock()
+	defer s.orgReposMu.Unlock()
+	if s.orgReposFetched && !refresh {
+		return s.orgRepos, false, nil
+	}
+	fetched, err := s.fetchOrgRepos(ctx)
+	if err != nil {
+		return s.orgRepos, false, err
+	}
+	s.orgRepos, s.orgReposFetched = fetched, true
+	return fetched, true, nil
+}
+
+// repoProvidersByID returns a repository GID -> provider map covering the
+// given teams' repositories, backed by the shared org repo cache. A GID
+// absent from the cache triggers at most one refetch; GIDs a fresh listing
+// still doesn't return (deleted or access-filtered repos) are negative-cached
+// so they can't force a re-pagination on every call. A fetch failure degrades
+// to bare owner/name slugs rather than failing the listing.
 func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) map[string]string {
 	var repoIDs []string
 	for _, n := range nodes {
@@ -127,48 +183,64 @@ func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.Li
 	if len(repoIDs) == 0 {
 		return nil
 	}
-	s.repoProvidersMu.Lock()
-	defer s.repoProvidersMu.Unlock()
-	if s.repoProvidersFetched {
-		covered := true
-		for _, id := range repoIDs {
-			if _, ok := s.repoProviders[id]; !ok {
-				covered = false
-				break
-			}
-		}
-		if covered {
-			return s.repoProviders
-		}
+	rows, fresh, err := s.orgRepoRows(ctx, false)
+	if err != nil {
+		logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
 	}
-	const pageSize = 50
-	out := map[string]string{}
-	var after *string
-	for {
-		resp, err := vaultgql.OrgRepositories(ctx, s.gqlClient(), pageSize, after)
-		if err != nil {
-			logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
-			// A stale cache still qualifies the repos it does know about —
-			// strictly better than degrading every slug on a failed refetch.
-			if s.repoProvidersFetched {
-				return s.repoProviders
-			}
-			return nil
+	providers := make(map[string]string, len(rows))
+	for _, r := range rows {
+		providers[r.GID] = r.Provider
+	}
+	if err != nil || fresh {
+		s.recordOrgRepoMisses(repoIDs, providers, err == nil)
+		return providers
+	}
+	// Cache hit with a gap: refetch once unless a fresh listing already
+	// proved the GID unresolvable.
+	missing := false
+	s.orgReposMu.Lock()
+	for _, id := range repoIDs {
+		if _, ok := providers[id]; ok {
+			continue
 		}
-		conn := resp.Organization.Repositories
-		for _, n := range conn.Nodes {
-			if n.Id == nil {
-				continue
-			}
-			out[*n.Id] = n.Provider
-		}
-		if !conn.PageInfo.HasNextPage || conn.PageInfo.EndCursor == nil {
+		if _, miss := s.orgRepoMisses[id]; !miss {
+			missing = true
 			break
 		}
-		after = conn.PageInfo.EndCursor
 	}
-	s.repoProviders, s.repoProvidersFetched = out, true
-	return out
+	s.orgReposMu.Unlock()
+	if !missing {
+		return providers
+	}
+	rows, _, err = s.orgRepoRows(ctx, true)
+	if err != nil {
+		logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
+	}
+	providers = make(map[string]string, len(rows))
+	for _, r := range rows {
+		providers[r.GID] = r.Provider
+	}
+	s.recordOrgRepoMisses(repoIDs, providers, err == nil)
+	return providers
+}
+
+// recordOrgRepoMisses negative-caches requested GIDs a fresh org listing did
+// not resolve. Only called with resolved=true after an error-free fetch — a
+// failed fetch proves nothing about the GIDs.
+func (s *SleuthVault) recordOrgRepoMisses(repoIDs []string, providers map[string]string, resolved bool) {
+	if !resolved {
+		return
+	}
+	s.orgReposMu.Lock()
+	defer s.orgReposMu.Unlock()
+	for _, id := range repoIDs {
+		if _, ok := providers[id]; !ok {
+			if s.orgRepoMisses == nil {
+				s.orgRepoMisses = map[string]struct{}{}
+			}
+			s.orgRepoMisses[id] = struct{}{}
+		}
+	}
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
@@ -341,12 +413,11 @@ func (s *SleuthVault) setTeamRepositories(ctx context.Context, team, repoURL str
 	if err != nil {
 		return err
 	}
-	repoMap, err := s.orgRepoGIDsByOwnerName(ctx)
+	targetKey := trailingOwnerName(repoURL)
+	repoMap, err := s.orgRepoGIDsByOwnerName(ctx, targetKey)
 	if err != nil {
 		return err
 	}
-
-	targetKey := trailingOwnerName(repoURL)
 	if add {
 		if _, ok := repoMap[targetKey]; !ok {
 			return fmt.Errorf("repository %q not found in the skills.new organization", repoURL)
@@ -430,31 +501,52 @@ func providerQualifiedRepo(provider, ownerName string) string {
 	return ownerName
 }
 
-// orgRepoGIDsByOwnerName pages the organization's repositories into a map
-// keyed by lowercase "owner/name" -> repository GID, used to resolve repo
-// identifiers (URLs or slugs) to the GIDs updateTeam needs.
-func (s *SleuthVault) orgRepoGIDsByOwnerName(ctx context.Context) (map[string]string, error) {
-	const pageSize = 50
-	out := map[string]string{}
-	var after *string
-	for {
-		resp, err := vaultgql.OrgRepositories(ctx, s.gqlClient(), pageSize, after)
-		if err != nil {
-			return nil, err
+// unqualifyProviderRepo undoes providerQualifiedRepo on the way back INTO the
+// server: a row starting with a known SaaS host segment reduces to the bare
+// owner/name slug skills.new round-trips as entityName. Anything else — bare
+// slugs, full URLs from user input, hosts we never add — passes through
+// untouched, so this only strips exactly what qualification added.
+func unqualifyProviderRepo(repo string) string {
+	for _, host := range providerRepoHosts {
+		if rest, ok := strings.CutPrefix(repo, host+"/"); ok && rest != "" {
+			return rest
 		}
-		conn := resp.Organization.Repositories
-		for _, n := range conn.Nodes {
-			if n.Id == nil {
+	}
+	return repo
+}
+
+// orgRepoGIDsByOwnerName returns a lowercase "owner/name" -> repository GID
+// map from the shared org repo cache, used to resolve repo identifiers (URLs
+// or slugs) to the GIDs updateTeam needs. When any of needKeys (already in
+// owner/name form) is absent from the cached listing, the listing is
+// refetched once so a repository connected after the first fetch still
+// resolves; a key missing from a fresh listing is genuinely unknown.
+func (s *SleuthVault) orgRepoGIDsByOwnerName(ctx context.Context, needKeys ...string) (map[string]string, error) {
+	rows, fresh, err := s.orgRepoRows(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	gids := make(map[string]string, len(rows))
+	for _, r := range rows {
+		gids[r.OwnerName] = r.GID
+	}
+	if !fresh {
+		for _, key := range needKeys {
+			if _, ok := gids[key]; ok {
 				continue
 			}
-			out[strings.ToLower(n.Owner+"/"+n.Name)] = *n.Id
-		}
-		if !conn.PageInfo.HasNextPage || conn.PageInfo.EndCursor == nil {
+			rows, _, err = s.orgRepoRows(ctx, true)
+			if err != nil {
+				return nil, err
+			}
+			gids = make(map[string]string, len(rows))
+			for _, r := range rows {
+				gids[r.OwnerName] = r.GID
+			}
 			break
 		}
-		after = conn.PageInfo.EndCursor
 	}
-	return out, nil
+	return gids, nil
 }
 
 // trailingOwnerName reduces a repo identifier (a full URL, an "owner/name"
@@ -561,9 +653,13 @@ func (s *SleuthVault) SetAssetInstallations(ctx context.Context, assetName strin
 		case InstallKindOrg:
 			// Handled before the loop (org is exclusive); unreachable here.
 		case InstallKindRepo:
-			repositories = append(repositories, vaultgql.RepositoryInstallationInput{Url: t.Repo})
+			// CurrentInstallTargets returns host-qualified slugs
+			// ("github.com/acme/tools"); reduce back to the bare owner/name
+			// form the server is known to accept (it round-trips entityName
+			// that way) before sending. User-typed URLs pass through as before.
+			repositories = append(repositories, vaultgql.RepositoryInstallationInput{Url: unqualifyProviderRepo(t.Repo)})
 		case InstallKindPath:
-			repositories = append(repositories, vaultgql.RepositoryInstallationInput{Url: t.Repo, Paths: t.Paths})
+			repositories = append(repositories, vaultgql.RepositoryInstallationInput{Url: unqualifyProviderRepo(t.Repo), Paths: t.Paths})
 		case InstallKindTeam:
 			gid, gerr := s.teamGIDByName(ctx, t.Team)
 			if gerr != nil {
