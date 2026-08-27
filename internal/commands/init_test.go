@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -227,4 +229,76 @@ func TestInitNonInteractivePathFlag(t *testing.T) {
 			t.Errorf("err = %v, want mention of --path", err)
 		}
 	})
+}
+
+// TestInitNewProfilePreservesSharedConfig reproduces the config clobbering
+// found during the skills.new → git vault migration: `SX_PROFILE=newprof
+// sx init --type git --repo-url ...` must create the new profile WITHOUT
+// wiping the config-wide force-disabled clients, and the top-level compat
+// mirror must keep following the persisted default profile rather than the
+// transient SX_PROFILE override (which used to swap every top-level field,
+// dropping the default profile's auth token).
+func TestInitNewProfilePreservesSharedConfig(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("SX_CONFIG_DIR", configDir)
+
+	seed := `{
+  "type": "sleuth",
+  "authToken": "tok-123",
+  "repositoryUrl": "https://app.example.com",
+  "defaultProfile": "local",
+  "activeProfiles": ["local"],
+  "profiles": {
+    "local": {"type": "sleuth", "authToken": "tok-123", "repositoryUrl": "https://app.example.com"}
+  },
+  "forceDisabledClients": ["codex", "github-copilot"]
+}`
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(seed), 0600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	t.Setenv("SX_PROFILE", "newprof")
+	existingCfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load existing config: %v", err)
+	}
+
+	vaultDir := filepath.Join(t.TempDir(), "vault")
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := runInitNonInteractivePreservingClients(cmd, context.Background(), "path", "", "", vaultDir, nil, existingCfg); err != nil {
+		t.Fatalf("init new profile: %v", err)
+	}
+
+	mpc, err := config.LoadMultiProfile()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if _, ok := mpc.GetProfile("newprof"); !ok {
+		t.Fatal("newprof profile was not created")
+	}
+	if local, ok := mpc.GetProfile("local"); !ok || local.AuthToken != "tok-123" {
+		t.Fatalf("local profile mangled: %+v", local)
+	}
+	if got := mpc.ForceDisabledClients; len(got) != 2 || got[0] != "codex" || got[1] != "github-copilot" {
+		t.Errorf("forceDisabledClients = %v, want preserved [codex github-copilot]", got)
+	}
+
+	// The top-level compat mirror must still reflect the persisted default
+	// profile (local), not the SX_PROFILE override this init ran under.
+	raw, err := os.ReadFile(filepath.Join(configDir, "config.json"))
+	if err != nil {
+		t.Fatalf("read config file: %v", err)
+	}
+	var top struct {
+		Type      string `json:"type"`
+		AuthToken string `json:"authToken"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("parse config file: %v", err)
+	}
+	if top.Type != "sleuth" || top.AuthToken != "tok-123" {
+		t.Errorf("top-level mirror = %+v, want the local profile's sleuth/tok-123", top)
+	}
 }

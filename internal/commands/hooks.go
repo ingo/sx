@@ -53,6 +53,11 @@ func installSelectedClientHooks(ctx context.Context, out *outputHelper, enabledC
 			log.Debug("skipping hook installation for disabled client", "client", client.ID())
 			continue
 		}
+		// Even with no explicit selection, never touch a force-disabled client.
+		if enabledClientSet == nil && cfg != nil && !cfg.IsClientEnabled(client.ID()) {
+			log.Debug("skipping hook installation for force-disabled client", "client", client.ID())
+			continue
+		}
 
 		// Gather all options (vault + this client), deduplicating by key
 		seen := make(map[string]bool)

@@ -24,6 +24,29 @@ import (
 	"github.com/sleuth-io/sx/v2/internal/vault"
 )
 
+// runInitNonInteractivePreservingClients runs the non-interactive init and,
+// when no client selection was made (no --clients flag), restores the
+// pre-existing config-wide client enable/disable lists afterwards. The init
+// save paths rebuild those lists from the (empty) selection, so without the
+// restore a non-interactive `sx init` — e.g. one creating a new profile via
+// SX_PROFILE — would silently re-enable every force-disabled client.
+func runInitNonInteractivePreservingClients(cmd *cobra.Command, ctx context.Context, repoType, serverURL, repoURL, pathFlag string, enabledClients []string, existingCfg *config.Config) error {
+	keep := enabledClients == nil && existingCfg != nil
+	if err := runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients); err != nil {
+		return err
+	}
+	if !keep {
+		return nil
+	}
+	mpc, err := config.LoadMultiProfile()
+	if err != nil {
+		return err
+	}
+	mpc.ForceEnabledClients = existingCfg.ForceEnabledClients
+	mpc.ForceDisabledClients = existingCfg.ForceDisabledClients
+	return config.SaveMultiProfile(mpc)
+}
+
 // computeDisabledClients returns the list of client IDs that should be disabled.
 // It only considers DETECTED clients - if a client isn't detected, we don't
 // add it to the disabled list (it's just not present, not explicitly disabled).
@@ -125,7 +148,7 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL, pa
 
 	if nonInteractive {
 		enabledClients = flagClients
-		err = runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients)
+		err = runInitNonInteractivePreservingClients(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients, existingCfg)
 	} else {
 		enabledClients, err = runInitInteractive(cmd, ctx, existingCfg, flagClients)
 	}
