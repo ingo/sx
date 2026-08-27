@@ -1325,6 +1325,7 @@ type AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallati
 	EntityName string                           `json:"entityName"`
 	// Canonical reference used to install this entity, when it differs from entityName: the email for USER installations. Null for entity types whose entityName is already the canonical reference.
 	EntityRef        *string `json:"entityRef"`
+	EntityProvider   *string `json:"entityProvider"`
 	EntityId         *string `json:"entityId"`
 	MonoRepoConfigId *string `json:"monoRepoConfigId"`
 	// GID of the collection this installation is derived from (null for direct installs)
@@ -1344,6 +1345,11 @@ func (v *AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstal
 // GetEntityRef returns AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallationsVaultAssetInstallation.EntityRef, and is useful for accessing the field via an interface.
 func (v *AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallationsVaultAssetInstallation) GetEntityRef() *string {
 	return v.EntityRef
+}
+
+// GetEntityProvider returns AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallationsVaultAssetInstallation.EntityProvider, and is useful for accessing the field via an interface.
+func (v *AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallationsVaultAssetInstallation) GetEntityProvider() *string {
+	return v.EntityProvider
 }
 
 // GetEntityId returns AssetInstallationsVaultAssetsVaultAssetsConnectionNodesVaultAssetInstallationsVaultAssetInstallation.EntityId, and is useful for accessing the field via an interface.
@@ -2093,6 +2099,7 @@ type CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAsse
 	EntityName string                           `json:"entityName"`
 	// Canonical reference used to install this entity, when it differs from entityName: the email for USER installations. Null for entity types whose entityName is already the canonical reference.
 	EntityRef        *string `json:"entityRef"`
+	EntityProvider   *string `json:"entityProvider"`
 	EntityId         *string `json:"entityId"`
 	MonoRepoConfigId *string `json:"monoRepoConfigId"`
 }
@@ -2110,6 +2117,11 @@ func (v *CollectionInstallationsCollectionVaultAssetCollectionInstallationsVault
 // GetEntityRef returns CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAssetInstallation.EntityRef, and is useful for accessing the field via an interface.
 func (v *CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAssetInstallation) GetEntityRef() *string {
 	return v.EntityRef
+}
+
+// GetEntityProvider returns CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAssetInstallation.EntityProvider, and is useful for accessing the field via an interface.
+func (v *CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAssetInstallation) GetEntityProvider() *string {
+	return v.EntityProvider
 }
 
 // GetEntityId returns CollectionInstallationsCollectionVaultAssetCollectionInstallationsVaultAssetInstallation.EntityId, and is useful for accessing the field via an interface.
@@ -5563,9 +5575,10 @@ func (v *OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnec
 
 // OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType includes the requested fields of the GraphQL type RepositoryType.
 type OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType struct {
-	Id    *string `json:"id"`
-	Owner string  `json:"owner"`
-	Name  string  `json:"name"`
+	Id       *string `json:"id"`
+	Owner    string  `json:"owner"`
+	Name     string  `json:"name"`
+	Provider string  `json:"provider"`
 }
 
 // GetId returns OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType.Id, and is useful for accessing the field via an interface.
@@ -5581,6 +5594,11 @@ func (v *OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnec
 // GetName returns OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType.Name, and is useful for accessing the field via an interface.
 func (v *OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType) GetName() string {
 	return v.Name
+}
+
+// GetProvider returns OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType.Provider, and is useful for accessing the field via an interface.
+func (v *OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionNodesRepositoryType) GetProvider() string {
+	return v.Provider
 }
 
 // OrgRepositoriesOrganizationOrganizationTypeRepositoriesRepositoryConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
@@ -9501,6 +9519,7 @@ query AssetInstallations ($first: Int, $after: String) {
 					entityType
 					entityName
 					entityRef
+					entityProvider
 					entityId
 					monoRepoConfigId
 					viaCollectionId
@@ -9727,6 +9746,7 @@ query CollectionInstallations ($id: ID!) {
 			entityType
 			entityName
 			entityRef
+			entityProvider
 			entityId
 			monoRepoConfigId
 		}
@@ -10839,6 +10859,7 @@ query OrgRepositories ($first: Int!, $after: String) {
 				id
 				owner
 				name
+				provider
 			}
 		}
 	}

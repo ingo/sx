@@ -178,7 +178,7 @@ func (s *SleuthVault) CurrentCollectionInstallTargets(ctx context.Context, name 
 			targets = append(targets, InstallTarget{Kind: InstallKindOrg})
 		case vaultgql.VaultAssetInstallationEntityTypeRepository:
 			targets = append(targets, InstallTarget{
-				Kind: InstallKindRepo, Repo: inst.EntityName,
+				Kind: InstallKindRepo, Repo: providerQualifiedRepo(derefStr(inst.EntityProvider), inst.EntityName),
 				EntityID: entityID, MonoRepoConfigID: derefStr(inst.MonoRepoConfigId),
 			})
 		case vaultgql.VaultAssetInstallationEntityTypeTeam:

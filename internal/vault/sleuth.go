@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Khan/genqlient/graphql"
@@ -68,6 +69,12 @@ type SleuthVault struct {
 	httpHandler     *HTTPSourceHandler
 	pathHandler     *PathSourceHandler
 	gitHandler      *GitSourceHandler
+
+	// Repository GID -> provider, fetched lazily by repoProvidersByID to
+	// host-qualify team repo slugs; guarded by repoProvidersMu.
+	repoProvidersMu      sync.Mutex
+	repoProviders        map[string]string
+	repoProvidersFetched bool
 }
 
 // refreshLockFileCache fetches a fresh lock file from the server and updates the local cache.

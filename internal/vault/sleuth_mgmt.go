@@ -54,8 +54,9 @@ func (s *SleuthVault) ListTeams(ctx context.Context, opts ListTeamsOptions) (*Li
 	}
 	conn := resp.Organization.Teams
 	teams := make([]mgmt.Team, 0, len(conn.Nodes))
+	providers := s.repoProvidersByID(ctx, conn.Nodes)
 	for _, n := range conn.Nodes {
-		teams = append(teams, sleuthTeamToMgmt(gqlTeamNodeToSleuthNode(n)))
+		teams = append(teams, sleuthTeamToMgmt(gqlTeamNodeToSleuthNode(n), providers))
 	}
 	return &ListTeamsResult{
 		Teams:      teams,
@@ -104,9 +105,54 @@ func gqlTeamNodeToSleuthNode(n vaultgql.ListTeamsOrganizationOrganizationTypeTea
 		node.Members = append(node.Members, sleuthTeamMember{ID: m.Id, Email: m.Email})
 	}
 	for _, r := range n.SkillsRepositories {
-		node.Repositories = append(node.Repositories, r.Owner+"/"+r.Name)
+		node.Repositories = append(node.Repositories, sleuthTeamRepo{ID: r.RepositoryId, OwnerName: r.Owner + "/" + r.Name})
 	}
 	return node
+}
+
+// repoProvidersByID returns the org's repository GID -> provider map, fetched
+// once per vault instance and only when some team actually carries
+// repositories (skillsRepositories expose no provider of their own). A fetch
+// failure degrades to bare owner/name slugs rather than failing the listing.
+func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) map[string]string {
+	needed := false
+	for _, n := range nodes {
+		if len(n.SkillsRepositories) > 0 {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return nil
+	}
+	s.repoProvidersMu.Lock()
+	defer s.repoProvidersMu.Unlock()
+	if s.repoProvidersFetched {
+		return s.repoProviders
+	}
+	const pageSize = 50
+	out := map[string]string{}
+	var after *string
+	for {
+		resp, err := vaultgql.OrgRepositories(ctx, s.gqlClient(), pageSize, after)
+		if err != nil {
+			logger.Get().Warn("could not resolve repository providers; team repos keep bare owner/name slugs", "error", err)
+			return nil
+		}
+		conn := resp.Organization.Repositories
+		for _, n := range conn.Nodes {
+			if n.Id == nil {
+				continue
+			}
+			out[*n.Id] = n.Provider
+		}
+		if !conn.PageInfo.HasNextPage || conn.PageInfo.EndCursor == nil {
+			break
+		}
+		after = conn.PageInfo.EndCursor
+	}
+	s.repoProviders, s.repoProvidersFetched = out, true
+	return out
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
@@ -340,6 +386,29 @@ func (s *SleuthVault) setTeamRepositories(ctx context.Context, team, repoURL str
 		return nil
 	}
 	return gqlMutationErrors(resp.UpdateTeam.Errors)
+}
+
+// providerRepoHosts maps skills.new integration providers to their SaaS
+// hosts. The server identifies repositories only as provider + "owner/name"
+// and exposes no URL, so this mapping is the only way a client can produce
+// a repo row that matches a real git remote (scope matching compares
+// normalized "host/owner/name" forms). Unknown or self-hosted providers
+// keep the bare owner/name slug — a row that can't match is still better
+// than one pointing at the wrong host.
+var providerRepoHosts = map[string]string{
+	"github":    "github.com",
+	"gitlab":    "gitlab.com",
+	"bitbucket": "bitbucket.org",
+}
+
+// providerQualifiedRepo prefixes an "owner/name" slug with the provider's
+// host when the provider is a known SaaS, so downstream consumers (lock
+// resolution, vault copy) get a repo row that matches real remotes.
+func providerQualifiedRepo(provider, ownerName string) string {
+	if host, ok := providerRepoHosts[strings.ToLower(strings.TrimSpace(provider))]; ok {
+		return host + "/" + ownerName
+	}
+	return ownerName
 }
 
 // orgRepoGIDsByOwnerName pages the organization's repositories into a map
@@ -591,13 +660,13 @@ func (s *SleuthVault) CurrentInstallTargets(ctx context.Context, name string) ([
 				}
 				if len(paths) > 0 {
 					targets = append(targets, InstallTarget{
-						Kind: InstallKindPath, Repo: inst.EntityName, Paths: paths,
+						Kind: InstallKindPath, Repo: providerQualifiedRepo(derefStr(inst.EntityProvider), inst.EntityName), Paths: paths,
 						EntityID: entityID, MonoRepoConfigID: derefStr(inst.MonoRepoConfigId),
 					})
 					continue
 				}
 			}
-			targets = append(targets, InstallTarget{Kind: InstallKindRepo, Repo: inst.EntityName, EntityID: entityID})
+			targets = append(targets, InstallTarget{Kind: InstallKindRepo, Repo: providerQualifiedRepo(derefStr(inst.EntityProvider), inst.EntityName), EntityID: entityID})
 		case vaultgql.VaultAssetInstallationEntityTypeTeam:
 			targets = append(targets, InstallTarget{Kind: InstallKindTeam, Team: inst.EntityName, EntityID: entityID})
 		case vaultgql.VaultAssetInstallationEntityTypeUser:
@@ -1834,7 +1903,14 @@ type sleuthTeamNode struct {
 	Admins       []string // emails from adminMembers
 	Members      []sleuthTeamMember
 	MemberCount  int
-	Repositories []string // owner/name slugs
+	Repositories []sleuthTeamRepo
+}
+
+// sleuthTeamRepo pairs a team repository's server GID with its owner/name
+// slug so the provider host can be resolved when converting to mgmt.Team.
+type sleuthTeamRepo struct {
+	ID        string
+	OwnerName string
 }
 
 type sleuthMutationError struct {
@@ -1842,7 +1918,7 @@ type sleuthMutationError struct {
 	Messages []string `json:"messages"`
 }
 
-func sleuthTeamToMgmt(node sleuthTeamNode) mgmt.Team {
+func sleuthTeamToMgmt(node sleuthTeamNode, providers map[string]string) mgmt.Team {
 	team := mgmt.Team{Name: node.Name, MemberCount: node.MemberCount}
 	for _, m := range node.Members {
 		team.Members = append(team.Members, mgmt.NormalizeEmail(m.Email))
@@ -1850,7 +1926,9 @@ func sleuthTeamToMgmt(node sleuthTeamNode) mgmt.Team {
 	for _, email := range node.Admins {
 		team.Admins = append(team.Admins, mgmt.NormalizeEmail(email))
 	}
-	team.Repositories = append(team.Repositories, node.Repositories...)
+	for _, r := range node.Repositories {
+		team.Repositories = append(team.Repositories, providerQualifiedRepo(providers[r.ID], r.OwnerName))
+	}
 	return team
 }
 

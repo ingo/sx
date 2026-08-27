@@ -12,6 +12,7 @@ query AssetInstallations($first: Int, $after: String) {
           entityType
           entityName
           entityRef
+          entityProvider
           entityId
           monoRepoConfigId
           viaCollectionId

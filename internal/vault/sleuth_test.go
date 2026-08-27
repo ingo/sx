@@ -104,6 +104,18 @@ func TestSleuthVault_ListTeams_QueryShape(t *testing.T) {
 				},
 			}
 		},
+		"OrgRepositories": func(vars map[string]any) any {
+			return map[string]any{
+				"organization": map[string]any{
+					"repositories": map[string]any{
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+						"nodes": []any{
+							map[string]any{"id": "repo-9", "owner": "org", "name": "repo-9", "provider": "github"},
+						},
+					},
+				},
+			}
+		},
 	})
 
 	v := NewSleuthVault(srv.URL, "test-token")
@@ -114,8 +126,12 @@ func TestSleuthVault_ListTeams_QueryShape(t *testing.T) {
 	if len(result.Teams) != 1 || result.Teams[0].Name != "platform" {
 		t.Fatalf("unexpected teams: %+v", result.Teams)
 	}
-	if len(*records) != 1 || (*records)[0].OperationName != "ListTeams" {
-		t.Fatalf("expected single ListTeams request, got: %+v", *records)
+	// Team repo slugs are host-qualified via the org repositories' provider.
+	if repos := result.Teams[0].Repositories; len(repos) != 1 || repos[0] != "github.com/org/repo-9" {
+		t.Fatalf("unexpected team repositories: %+v", repos)
+	}
+	if len(*records) != 2 || (*records)[0].OperationName != "ListTeams" || (*records)[1].OperationName != "OrgRepositories" {
+		t.Fatalf("expected ListTeams then OrgRepositories requests, got: %+v", *records)
 	}
 	// $first variable must be sent so the server caps the page.
 	if _, ok := (*records)[0].Variables["first"]; !ok {
