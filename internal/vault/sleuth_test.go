@@ -1270,3 +1270,59 @@ func TestSleuthVault_GetAssetDetails_ByName(t *testing.T) {
 		t.Errorf("second request should be the name search, got: %+v", (*records)[1].Variables)
 	}
 }
+
+// CurrentInstallTargets must host-qualify repo and path rows via the
+// installation entity's provider — this read feeds the scope editors and
+// `sx vault copy`, where a bare owner/name slug can never match a real git
+// remote (the exact loss that killed repo-scoped installs after migrating
+// to a file vault).
+func TestSleuthVault_CurrentInstallTargets_QualifiesRepoRows(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"AssetInstallations": func(map[string]any) any {
+			return map[string]any{"vault": map[string]any{"assets": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+				"nodes": []any{map[string]any{
+					"__typename": "Skill",
+					"slug":       "my-skill",
+					"name":       "My skill",
+					"installations": []any{
+						map[string]any{
+							"entityType": "REPOSITORY", "entityName": "acme/tools",
+							"entityRef": nil, "entityProvider": "github", "entityId": "RP1",
+							"monoRepoConfigId": nil, "viaCollectionId": nil,
+						},
+						map[string]any{
+							"entityType": "REPOSITORY", "entityName": "acme/mono",
+							"entityRef": nil, "entityProvider": "github", "entityId": "RP2",
+							"monoRepoConfigId": "MC1", "viaCollectionId": nil,
+						},
+					},
+				}},
+			}}}
+		},
+		"RepoMonoRepoConfigs": func(vars map[string]any) any {
+			if vars["id"] != "RP2" {
+				t.Fatalf("RepoMonoRepoConfigs id = %v, want RP2", vars["id"])
+			}
+			return map[string]any{"repository": map[string]any{"monoRepoConfigs": []any{
+				map[string]any{"id": "MC1", "sourcePathPrefixIncludes": []any{"services/api"}},
+			}}}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "token")
+	targets, present, err := v.CurrentInstallTargets(context.Background(), "my-skill")
+	if err != nil || !present {
+		t.Fatalf("CurrentInstallTargets: present=%v err=%v", present, err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets = %+v, want repo + path", targets)
+	}
+	if targets[0].Kind != InstallKindRepo || targets[0].Repo != "github.com/acme/tools" {
+		t.Fatalf("targets[0] = %+v, want repo github.com/acme/tools", targets[0])
+	}
+	if targets[1].Kind != InstallKindPath || targets[1].Repo != "github.com/acme/mono" ||
+		len(targets[1].Paths) != 1 || targets[1].Paths[0] != "services/api" {
+		t.Fatalf("targets[1] = %+v, want path github.com/acme/mono [services/api]", targets[1])
+	}
+}
