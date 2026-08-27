@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +165,96 @@ func TestCopy_PathToPathRoundTrip(t *testing.T) {
 	}
 	if versions, err := dst.GetVersionList(ctx, "my-skill"); err != nil || len(versions) != 2 {
 		t.Fatalf("after re-copy dst versions = %v err=%v, want 2 (no duplication)", versions, err)
+	}
+}
+
+// emptyVersionListVault simulates a backend that exposes no version history
+// for an asset even though the asset (and its latest version) is downloadable —
+// the copy engine must fall back to the summary's latest version instead of
+// silently copying nothing.
+type emptyVersionListVault struct {
+	vault.Vault
+}
+
+func (v *emptyVersionListVault) GetVersionList(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func TestCopy_EmptyVersionListFallsBackToLatest(t *testing.T) {
+	mgmt.ResetActorCache()
+	ctx := context.Background()
+
+	src := newSeededVault(t)
+	dst := newEmptyVault(t)
+
+	for _, v := range []string{"1.0.0", "1.1.0"} {
+		a := &lockfile.Asset{Name: "my-skill", Version: v, Type: asset.TypeSkill}
+		if err := src.AddAsset(ctx, a, skillZip(t, "my-skill", v)); err != nil {
+			t.Fatalf("seed asset %s: %v", v, err)
+		}
+	}
+
+	report, err := vaultcopy.Copy(ctx, &emptyVersionListVault{src}, dst, vaultcopy.Options{Assets: true})
+	if err != nil {
+		t.Fatalf("Copy: %v (warnings: %v)", err, report.Warnings)
+	}
+	if report.Assets != 1 || report.Versions != 1 {
+		t.Fatalf("report = %+v, want 1 asset / 1 version (latest only)", report)
+	}
+	found := false
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "no version history") && strings.Contains(w, "my-skill") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a no-version-history warning, got %v", report.Warnings)
+	}
+	versions, err := dst.GetVersionList(ctx, "my-skill")
+	if err != nil || len(versions) != 1 || versions[0] != "1.1.0" {
+		t.Fatalf("dst versions = %v err=%v, want just latest 1.1.0", versions, err)
+	}
+}
+
+// A user scope belonging to someone other than the operator must survive the
+// copy: the engine's trusted bulk write lifts the self-only restriction, which
+// exists to stop interactive privilege escalation, not faithful migration.
+func TestCopy_ForeignUserScopeCopied(t *testing.T) {
+	mgmt.ResetActorCache()
+	ctx := context.Background()
+
+	src := newSeededVault(t)
+	dst := newEmptyVault(t)
+
+	a := &lockfile.Asset{Name: "my-skill", Version: "1.0.0", Type: asset.TypeSkill}
+	if err := src.AddAsset(ctx, a, skillZip(t, "my-skill", "1.0.0")); err != nil {
+		t.Fatalf("seed asset: %v", err)
+	}
+	// Seed a scope for a user who is not the operator (admin@example.com);
+	// only a trusted write can record it, same as the copy engine uses.
+	bulk := src.(interface {
+		SetAssetInstallations(context.Context, string, []vault.InstallTarget, bool) ([]vault.SkippedTarget, error)
+	})
+	skipped, err := bulk.SetAssetInstallations(vault.ContextWithTrustedScopeWrite(ctx), "my-skill",
+		[]vault.InstallTarget{{Kind: vault.InstallKindUser, User: "bob@example.com"}}, false)
+	if err != nil || len(skipped) != 0 {
+		t.Fatalf("seed foreign user scope: err=%v skipped=%+v", err, skipped)
+	}
+
+	report, err := vaultcopy.Copy(ctx, src, dst, vaultcopy.Options{Assets: true})
+	if err != nil {
+		t.Fatalf("Copy: %v (warnings: %v)", err, report.Warnings)
+	}
+	if report.Scopes != 1 {
+		t.Fatalf("report = %+v (warnings: %v), want 1 scope", report, report.Warnings)
+	}
+	scopeReader := dst.(interface {
+		AssetInstallScopes(context.Context, string) ([]manifest.Scope, bool, error)
+	})
+	scopes, present, err := scopeReader.AssetInstallScopes(ctx, "my-skill")
+	if err != nil || !present || len(scopes) != 1 ||
+		scopes[0].Kind != manifest.ScopeKindUser || scopes[0].User != "bob@example.com" {
+		t.Fatalf("dst scopes = %+v present=%v err=%v, want bob@example.com user scope", scopes, present, err)
 	}
 }
 

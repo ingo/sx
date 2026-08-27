@@ -1115,7 +1115,7 @@ func commonSetAssetInstallations(ctx context.Context, vaultRoot string, actor mg
 		var resolved []resolvedScope
 		if !orgWide {
 			for _, t := range targets {
-				s, reason := resolveSetTarget(m, t, actor)
+				s, reason := resolveSetTarget(m, t, actor, !enforce)
 				// Existence/format settled; now the RBAC gate (who may set it).
 				if reason == "" && enforce {
 					reason = scopeSetPermissionReason(m, t, actor)
@@ -1244,11 +1244,24 @@ func commonSetAssetInstallations(ctx context.Context, vaultRoot string, actor mg
 // verbatim (mirrors the Sleuth vault's GID-resolution skip). Org is never
 // resolved here (handled as a scope clear). The team/bot errors carry their own
 // distinct wording (ErrTeamNotFound vs the "not an admin" message), so the user
-// can tell a missing team from a permissions problem.
-func resolveSetTarget(m *manifest.Manifest, t InstallTarget, actor mgmt.Actor) (manifest.Scope, string) {
-	s, err := installTargetScope(t, actor)
-	if err != nil {
-		return manifest.Scope{}, err.Error()
+// can tell a missing team from a permissions problem. A trusted bulk write
+// (vault copy replicating a source's scopes verbatim) also lifts the
+// user-scope self-only restriction: the scope already existed in the source,
+// so faithfully carrying it over is not the privilege escalation that check
+// guards against.
+func resolveSetTarget(m *manifest.Manifest, t InstallTarget, actor mgmt.Actor, trusted bool) (manifest.Scope, string) {
+	var s manifest.Scope
+	if trusted && t.Kind == InstallKindUser {
+		if t.User == "" {
+			return manifest.Scope{}, "user installation missing email"
+		}
+		s = manifest.Scope{Kind: manifest.ScopeKindUser, User: t.User}
+	} else {
+		var err error
+		s, err = installTargetScope(t, actor)
+		if err != nil {
+			return manifest.Scope{}, err.Error()
+		}
 	}
 	switch t.Kind {
 	case InstallKindTeam:

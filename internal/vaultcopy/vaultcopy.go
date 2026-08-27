@@ -234,6 +234,17 @@ func copyAssets(ctx context.Context, src, dst vault.Vault, opts Options, r *Repo
 			r.warnf("list versions for %q: %v", a.Name, err)
 			continue
 		}
+		if len(versions) == 0 {
+			// Some backends expose no version history for certain asset types
+			// even though a latest version exists and is downloadable. Without
+			// this fallback the asset would be "copied" with no content at all.
+			if a.LatestVersion == "" {
+				r.warnf("source lists no versions for %q; skipping", a.Name)
+				continue
+			}
+			r.warnf("source lists no version history for %q; copying latest version %s only", a.Name, a.LatestVersion)
+			versions = []string{a.LatestVersion}
+		}
 
 		// Read the source's scopes BEFORE uploading any versions. If the read
 		// fails we skip the asset entirely rather than leaving stranded versions
