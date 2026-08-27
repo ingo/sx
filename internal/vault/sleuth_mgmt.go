@@ -111,24 +111,35 @@ func gqlTeamNodeToSleuthNode(n vaultgql.ListTeamsOrganizationOrganizationTypeTea
 }
 
 // repoProvidersByID returns the org's repository GID -> provider map, fetched
-// once per vault instance and only when some team actually carries
-// repositories (skillsRepositories expose no provider of their own). A fetch
-// failure degrades to bare owner/name slugs rather than failing the listing.
+// lazily and only when some team actually carries repositories
+// (skillsRepositories expose no provider of their own). The map is cached on
+// the vault instance; a cached map that doesn't cover every team repo GID —
+// a repository connected after the first fetch, in a long-lived process —
+// triggers one refetch. A fetch failure degrades to bare owner/name slugs
+// rather than failing the listing.
 func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) map[string]string {
-	needed := false
+	var repoIDs []string
 	for _, n := range nodes {
-		if len(n.SkillsRepositories) > 0 {
-			needed = true
-			break
+		for _, r := range n.SkillsRepositories {
+			repoIDs = append(repoIDs, r.RepositoryId)
 		}
 	}
-	if !needed {
+	if len(repoIDs) == 0 {
 		return nil
 	}
 	s.repoProvidersMu.Lock()
 	defer s.repoProvidersMu.Unlock()
 	if s.repoProvidersFetched {
-		return s.repoProviders
+		covered := true
+		for _, id := range repoIDs {
+			if _, ok := s.repoProviders[id]; !ok {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			return s.repoProviders
+		}
 	}
 	const pageSize = 50
 	out := map[string]string{}
@@ -392,12 +403,15 @@ func (s *SleuthVault) setTeamRepositories(ctx context.Context, team, repoURL str
 // hosts. The server identifies repositories only as provider + "owner/name"
 // and exposes no URL, so this mapping is the only way a client can produce
 // a repo row that matches a real git remote (scope matching compares
-// normalized "host/owner/name" forms). Unknown or self-hosted providers
-// keep the bare owner/name slug — a row that can't match is still better
-// than one pointing at the wrong host.
+// normalized "host/owner/name" forms). Only providers the server guarantees
+// are SaaS-hosted belong here: "github" (self-hosted is the distinct
+// "github_enterprise" provider) and "bitbucket" (the server's bitbucket
+// provider is hardcoded to Bitbucket Cloud). "gitlab" is deliberately
+// absent — the same provider value covers self-managed GitLab, and an
+// unmapped provider's bare owner/name slug (a row that can't match) is
+// still better than one pointing at the wrong host.
 var providerRepoHosts = map[string]string{
 	"github":    "github.com",
-	"gitlab":    "gitlab.com",
 	"bitbucket": "bitbucket.org",
 }
 

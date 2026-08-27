@@ -141,10 +141,14 @@ func SaveToProfile(cfg *Config, profileName string) error {
 	// Try to load existing multi-profile config
 	mpc, err := LoadMultiProfile()
 	if err != nil {
-		// No existing config, create new multi-profile config
+		// No existing config, create new multi-profile config. DefaultProfile
+		// starts empty so the first-profile promotion below makes whichever
+		// profile this save actually creates the default — pre-seeding
+		// "default" here would leave a dangling DefaultProfile (and an empty
+		// top-level compat mirror) when the first save targets a named
+		// profile via --profile/SX_PROFILE.
 		mpc = &MultiProfileConfig{
-			DefaultProfile: DefaultProfileName,
-			Profiles:       make(map[string]*Profile),
+			Profiles: make(map[string]*Profile),
 		}
 	}
 
