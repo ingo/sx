@@ -860,6 +860,61 @@ func TestPathVault_SetAssetInstallation_RejectsOtherUser(t *testing.T) {
 	}
 }
 
+// A trusted bulk write (vault copy replicating a source's existing scopes)
+// may carry user scopes for other users — the self-only rule guards against
+// interactive privilege escalation, not faithful migration. An untrusted bulk
+// write still skips them.
+func TestPathVault_TrustedBulkSetAllowsForeignUserScope(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice Admin")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault failed: %v", err)
+	}
+	ctx := context.Background()
+	foreign := InstallTarget{Kind: InstallKindUser, User: "bob@example.com"}
+
+	skipped, err := v.SetAssetInstallations(ctx, "my-skill", []InstallTarget{foreign}, false)
+	if err != nil {
+		t.Fatalf("untrusted bulk set: %v", err)
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "may only target the authenticated caller") {
+		t.Fatalf("untrusted bulk set should skip the foreign user scope, got %+v", skipped)
+	}
+
+	skipped, err = v.SetAssetInstallations(ContextWithTrustedScopeWrite(ctx), "my-skill", []InstallTarget{foreign}, false)
+	if err != nil {
+		t.Fatalf("trusted bulk set: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("trusted bulk set should apply the foreign user scope, got skipped %+v", skipped)
+	}
+	scopes, present, err := v.AssetInstallScopes(ctx, "my-skill")
+	if err != nil || !present || len(scopes) != 1 ||
+		scopes[0].Kind != manifest.ScopeKindUser || scopes[0].User != "bob@example.com" {
+		t.Fatalf("scopes = %+v present=%v err=%v, want bob@example.com user scope", scopes, present, err)
+	}
+}
+
 // TestPathVault_TeamMutationsRequireAdmin verifies that every destructive
 // team mutation enforces admin membership inside the transaction, not
 // just at the CLI pre-check.
@@ -1216,5 +1271,46 @@ func TestRemoveTeamMember_SelfRemoval(t *testing.T) {
 	if err := v.RemoveTeamMember(ctx, "my-team", "alice@example.com"); err == nil ||
 		!strings.Contains(err.Error(), "not an admin") {
 		t.Fatalf("non-admin removing another member should be denied, got %v", err)
+	}
+}
+
+// Collection installs get the same trusted-write exception as asset scopes:
+// vault copy replicates the source's rows, so a "just for me" install
+// belonging to another user must survive, while untrusted writes still
+// enforce the self-only rule.
+func TestPathVault_TrustedSetCollectionInstallationAllowsForeignUser(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice Admin")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Collections:   []manifest.Collection{{Name: "essentials"}},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault failed: %v", err)
+	}
+	ctx := context.Background()
+	foreign := InstallTarget{Kind: InstallKindUser, User: "bob@example.com"}
+
+	err = v.SetCollectionInstallation(ctx, "essentials", foreign)
+	if err == nil || !strings.Contains(err.Error(), "may only target the authenticated caller") {
+		t.Fatalf("untrusted collection install for a non-caller: err=%v, want self-only rejection", err)
+	}
+
+	if err := v.SetCollectionInstallation(ContextWithTrustedScopeWrite(ctx), "essentials", foreign); err != nil {
+		t.Fatalf("trusted collection install: %v", err)
+	}
+	targets, present, err := v.CurrentCollectionInstallTargets(ctx, "essentials")
+	if err != nil || !present || len(targets) != 1 ||
+		targets[0].Kind != InstallKindUser || targets[0].User != "bob@example.com" {
+		t.Fatalf("targets = %+v present=%v err=%v, want bob@example.com user target", targets, present, err)
 	}
 }

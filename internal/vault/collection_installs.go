@@ -37,18 +37,23 @@ type CollectionInstaller interface {
 }
 
 // collectionTargetScope converts an install target into the manifest scope
-// row stored on a collection. It differs from installTargetScope in one
-// deliberate way: org becomes an explicit kind=org row instead of an error
-// or a cleared list, because collection rows are additive grants.
-func collectionTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope, error) {
+// row stored on a collection. It differs from installTargetScope in two
+// deliberate ways: org becomes an explicit kind=org row instead of an error
+// or a cleared list (collection rows are additive grants), and a trusted
+// write (sx vault copy replicating the source's rows) lifts the user-scope
+// self-only rule the same way the asset path's resolveSetTarget does.
+func collectionTargetScope(target InstallTarget, actor mgmt.Actor, trusted bool) (manifest.Scope, error) {
 	if target.Kind == InstallKindOrg {
 		return manifest.Scope{Kind: manifest.ScopeKindOrg}, nil
+	}
+	if target.Kind == InstallKindUser {
+		return resolveUserScopeForWrite(target, actor, trusted)
 	}
 	return installTargetScope(target, actor)
 }
 
-func commonSetCollectionInstallation(vaultRoot string, actor mgmt.Actor, name string, target InstallTarget) error {
-	s, err := collectionTargetScope(target, actor)
+func commonSetCollectionInstallation(ctx context.Context, vaultRoot string, actor mgmt.Actor, name string, target InstallTarget) error {
+	s, err := collectionTargetScope(target, actor, scopeRBACBypassed(ctx))
 	if err != nil {
 		return err
 	}
@@ -87,8 +92,8 @@ func commonSetCollectionInstallation(vaultRoot string, actor mgmt.Actor, name st
 	})
 }
 
-func commonRemoveCollectionInstallation(vaultRoot string, actor mgmt.Actor, name string, target InstallTarget) error {
-	needle, err := collectionTargetScope(target, actor)
+func commonRemoveCollectionInstallation(ctx context.Context, vaultRoot string, actor mgmt.Actor, name string, target InstallTarget) error {
+	needle, err := collectionTargetScope(target, actor, scopeRBACBypassed(ctx))
 	if err != nil {
 		return err
 	}
@@ -164,14 +169,14 @@ func commonCurrentCollectionInstallTargets(vaultRoot, name string) ([]InstallTar
 // SetCollectionInstallation adds an install target to a collection.
 func (p *PathVault) SetCollectionInstallation(ctx context.Context, name string, target InstallTarget) error {
 	return p.withLock(ctx, func(actor mgmt.Actor) error {
-		return commonSetCollectionInstallation(p.repoPath, actor, name, target)
+		return commonSetCollectionInstallation(ctx, p.repoPath, actor, name, target)
 	})
 }
 
 // RemoveCollectionInstallation removes an install target from a collection.
 func (p *PathVault) RemoveCollectionInstallation(ctx context.Context, name string, target InstallTarget) error {
 	return p.withLock(ctx, func(actor mgmt.Actor) error {
-		return commonRemoveCollectionInstallation(p.repoPath, actor, name, target)
+		return commonRemoveCollectionInstallation(ctx, p.repoPath, actor, name, target)
 	})
 }
 
@@ -183,14 +188,14 @@ func (p *PathVault) CurrentCollectionInstallTargets(ctx context.Context, name st
 // SetCollectionInstallation adds an install target to a collection and pushes.
 func (g *GitVault) SetCollectionInstallation(ctx context.Context, name string, target InstallTarget) error {
 	return g.runInVaultTx(ctx, "Install collection "+name, func(root string, actor mgmt.Actor) error {
-		return commonSetCollectionInstallation(root, actor, name, target)
+		return commonSetCollectionInstallation(ctx, root, actor, name, target)
 	})
 }
 
 // RemoveCollectionInstallation removes an install target and pushes.
 func (g *GitVault) RemoveCollectionInstallation(ctx context.Context, name string, target InstallTarget) error {
 	return g.runInVaultTx(ctx, "Uninstall collection "+name, func(root string, actor mgmt.Actor) error {
-		return commonRemoveCollectionInstallation(root, actor, name, target)
+		return commonRemoveCollectionInstallation(ctx, root, actor, name, target)
 	})
 }
 

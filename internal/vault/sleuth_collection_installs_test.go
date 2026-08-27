@@ -127,6 +127,10 @@ func TestSleuthVault_CurrentCollectionInstallTargets(t *testing.T) {
 							"entityType": "TEAM", "entityName": "platform",
 							"entityRef": nil, "entityId": "TM1", "monoRepoConfigId": nil,
 						},
+						map[string]any{
+							"entityType": "REPOSITORY", "entityName": "acme/tools",
+							"entityRef": nil, "entityProvider": "github", "entityId": "RP1", "monoRepoConfigId": nil,
+						},
 					},
 				},
 			}
@@ -138,14 +142,18 @@ func TestSleuthVault_CurrentCollectionInstallTargets(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("CurrentCollectionInstallTargets: present=%v err=%v", present, err)
 	}
-	if len(targets) != 2 {
-		t.Fatalf("targets = %+v, want org + team", targets)
+	if len(targets) != 3 {
+		t.Fatalf("targets = %+v, want org + team + repo", targets)
 	}
 	if targets[0].Kind != InstallKindOrg {
 		t.Fatalf("targets[0] = %+v, want org", targets[0])
 	}
 	if targets[1].Kind != InstallKindTeam || targets[1].Team != "platform" || targets[1].EntityID != "TM1" {
 		t.Fatalf("targets[1] = %+v, want team platform/TM1", targets[1])
+	}
+	// Repo rows come back host-qualified via the entity's provider.
+	if targets[2].Kind != InstallKindRepo || targets[2].Repo != "github.com/acme/tools" {
+		t.Fatalf("targets[2] = %+v, want repo github.com/acme/tools", targets[2])
 	}
 
 	// Unknown collection reports not-present, not an error.

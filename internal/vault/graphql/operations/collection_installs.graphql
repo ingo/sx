@@ -4,6 +4,7 @@ query CollectionInstallations($id: ID!) {
       entityType
       entityName
       entityRef
+      entityProvider
       entityId
       monoRepoConfigId
     }

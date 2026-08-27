@@ -322,7 +322,7 @@ func SaveMultiProfile(mpc *MultiProfileConfig) error {
 	}
 
 	// Copy active profile fields to top level for old binaries
-	activeProfileName := GetActiveProfileName(mpc)
+	activeProfileName := persistedActiveProfileName(mpc)
 	if activeProfile, ok := mpc.Profiles[activeProfileName]; ok {
 		compat.Type = activeProfile.Type
 		compat.ServerURL = activeProfile.ServerURL
@@ -343,6 +343,23 @@ func SaveMultiProfile(mpc *MultiProfileConfig) error {
 	}
 
 	return nil
+}
+
+// persistedActiveProfileName is the profile the config FILE considers
+// active: the default profile, else the first active profile. Unlike
+// GetActiveProfileName it deliberately ignores the --profile/SX_PROFILE
+// runtime override — the top-level compat mirror is persistent state for
+// old binaries, and mirroring a transient override would rewrite it to a
+// profile the file itself doesn't treat as default (e.g. `SX_PROFILE=new
+// sx init` swapping every top-level field, including dropping authToken).
+func persistedActiveProfileName(mpc *MultiProfileConfig) string {
+	if mpc.DefaultProfile != "" {
+		return mpc.DefaultProfile
+	}
+	if len(mpc.ActiveProfiles) > 0 {
+		return firstName(mpc.ActiveProfiles[0])
+	}
+	return DefaultProfileName
 }
 
 // GetActiveProfileName returns the name of the profile that owns single-

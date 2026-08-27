@@ -896,18 +896,10 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 		}
 		s = manifest.Scope{Kind: manifest.ScopeKindTeam, Team: target.Team}
 	case InstallKindUser:
-		if target.User == "" {
-			return errors.New("user installation missing email")
+		var err error
+		if s, err = resolveUserScopeForWrite(target, actor, false); err != nil {
+			return err
 		}
-		// User-scoped installs may only target the caller. Any write-
-		// access holder could otherwise force an asset to be "global" in
-		// another user's resolved lock file via the user-match rule.
-		// Mirrors the sleuth vault check in sleuth_mgmt.go to avoid a
-		// silent privilege escalation.
-		if manifest.NormalizeEmail(target.User) != actor.Email {
-			return fmt.Errorf("user-scoped installs may only target the authenticated caller (got %q, actor %q)", target.User, actor.Email)
-		}
-		s = manifest.Scope{Kind: manifest.ScopeKindUser, User: target.User}
 	case InstallKindBot:
 		if target.Bot == "" {
 			return errors.New("bot installation missing bot name")
@@ -1115,7 +1107,7 @@ func commonSetAssetInstallations(ctx context.Context, vaultRoot string, actor mg
 		var resolved []resolvedScope
 		if !orgWide {
 			for _, t := range targets {
-				s, reason := resolveSetTarget(m, t, actor)
+				s, reason := resolveSetTarget(m, t, actor, !enforce)
 				// Existence/format settled; now the RBAC gate (who may set it).
 				if reason == "" && enforce {
 					reason = scopeSetPermissionReason(m, t, actor)
@@ -1244,11 +1236,24 @@ func commonSetAssetInstallations(ctx context.Context, vaultRoot string, actor mg
 // verbatim (mirrors the Sleuth vault's GID-resolution skip). Org is never
 // resolved here (handled as a scope clear). The team/bot errors carry their own
 // distinct wording (ErrTeamNotFound vs the "not an admin" message), so the user
-// can tell a missing team from a permissions problem.
-func resolveSetTarget(m *manifest.Manifest, t InstallTarget, actor mgmt.Actor) (manifest.Scope, string) {
-	s, err := installTargetScope(t, actor)
-	if err != nil {
-		return manifest.Scope{}, err.Error()
+// can tell a missing team from a permissions problem. A trusted bulk write
+// (vault copy replicating a source's scopes verbatim) also lifts the
+// user-scope self-only restriction: the scope already existed in the source,
+// so faithfully carrying it over is not the privilege escalation that check
+// guards against.
+func resolveSetTarget(m *manifest.Manifest, t InstallTarget, actor mgmt.Actor, trusted bool) (manifest.Scope, string) {
+	var s manifest.Scope
+	if t.Kind == InstallKindUser {
+		var err error
+		if s, err = resolveUserScopeForWrite(t, actor, trusted); err != nil {
+			return manifest.Scope{}, err.Error()
+		}
+	} else {
+		var err error
+		s, err = installTargetScope(t, actor)
+		if err != nil {
+			return manifest.Scope{}, err.Error()
+		}
 	}
 	switch t.Kind {
 	case InstallKindTeam:
@@ -1292,8 +1297,10 @@ func scopeRBACBypassed(ctx context.Context) bool {
 //   - No org-admins configured → ungoverned: anyone may set any scope.
 //   - org-admin → may set any scope.
 //   - team scope → actor must be an admin of THAT team (or an org-admin).
-//   - user scope ("just for me") → always allowed; installTargetScope already
-//     forbids targeting anyone but the caller, so user is self-only.
+//   - user scope ("just for me") → always allowed; resolveUserScopeForWrite
+//     already forbids targeting anyone but the caller for untrusted writes,
+//     so user is self-only (trusted vault-copy bulk writes are the one
+//     exception — see resolveUserScopeForWrite).
 //   - org / repo / path / bot → org-admins only.
 //
 // This is a client-side gate — a file-backed vault can't stop a raw `git push`
@@ -1569,13 +1576,7 @@ func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope,
 		}
 		return manifest.Scope{Kind: manifest.ScopeKindTeam, Team: target.Team}, nil
 	case InstallKindUser:
-		if target.User == "" {
-			return manifest.Scope{}, errors.New("user installation missing email")
-		}
-		if manifest.NormalizeEmail(target.User) != actor.Email {
-			return manifest.Scope{}, fmt.Errorf("user-scoped installs may only target the authenticated caller (got %q, actor %q)", target.User, actor.Email)
-		}
-		return manifest.Scope{Kind: manifest.ScopeKindUser, User: target.User}, nil
+		return resolveUserScopeForWrite(target, actor, false)
 	case InstallKindBot:
 		if target.Bot == "" {
 			return manifest.Scope{}, errors.New("bot installation missing bot name")
@@ -1584,6 +1585,25 @@ func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope,
 	default:
 		return manifest.Scope{}, fmt.Errorf("unknown installation kind: %q", target.Kind)
 	}
+}
+
+// resolveUserScopeForWrite converts a user install target into its manifest
+// scope. Untrusted writes enforce the self-only rule: user-scoped installs may
+// only target the caller, since any write-access holder could otherwise force
+// an asset to be "global" in another user's resolved lock file via the
+// user-match rule (mirrors the sleuth vault's server-side check). A trusted
+// bulk write (sx vault copy replicating a source vault's existing scopes —
+// see ContextWithTrustedScopeWrite) lifts the restriction: the scope was
+// already valid in the source, so carrying it over faithfully is not the
+// escalation the rule guards against.
+func resolveUserScopeForWrite(target InstallTarget, actor mgmt.Actor, trusted bool) (manifest.Scope, error) {
+	if target.User == "" {
+		return manifest.Scope{}, errors.New("user installation missing email")
+	}
+	if !trusted && manifest.NormalizeEmail(target.User) != actor.Email {
+		return manifest.Scope{}, fmt.Errorf("user-scoped installs may only target the authenticated caller (got %q, actor %q)", target.User, actor.Email)
+	}
+	return manifest.Scope{Kind: manifest.ScopeKindUser, User: target.User}, nil
 }
 
 func installScopeMatches(scopeRow, needle manifest.Scope) bool {

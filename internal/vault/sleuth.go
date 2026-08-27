@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Khan/genqlient/graphql"
@@ -68,6 +69,21 @@ type SleuthVault struct {
 	httpHandler     *HTTPSourceHandler
 	pathHandler     *PathSourceHandler
 	gitHandler      *GitSourceHandler
+
+	// Lazily fetched org repository listing (GID, owner/name, provider),
+	// shared by provider qualification and GID resolution so one paged
+	// OrgRepositories fetch serves both. orgReposGen coalesces concurrent
+	// refreshes (a caller that waited out someone else's refetch reuses it).
+	// orgRepoMisses negative-caches prefixed lookups ("id:<gid>",
+	// "name:<owner/name>") a fresh fetch failed to resolve, so an
+	// unresolvable key can't force a re-pagination on every call. All
+	// guarded by orgReposMu; the rows slice is replaced wholesale on
+	// refresh, never mutated.
+	orgReposMu      sync.Mutex
+	orgRepos        []orgRepoRow
+	orgReposFetched bool
+	orgReposGen     uint64
+	orgRepoMisses   map[string]struct{}
 }
 
 // refreshLockFileCache fetches a fresh lock file from the server and updates the local cache.

@@ -88,6 +88,12 @@ in both directions, with these exceptions:
 source asset that has no installations and clears that auto-applied install on
 the destination, so an uninstalled asset stays uninstalled.)
 
+To keep user-scoped installs intact, the copy's scope writes are trusted: they
+carry "just for me" installs belonging to users other than the operator, which
+the file-backed vaults' self-only rule would otherwise reject (see
+[Users](users.md)). The scope already existed in the source, so replicating it
+is not the escalation that rule guards against.
+
 The preview/report always names what was skipped, so nothing is lost silently.
 
 ## See also

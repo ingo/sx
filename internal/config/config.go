@@ -141,10 +141,14 @@ func SaveToProfile(cfg *Config, profileName string) error {
 	// Try to load existing multi-profile config
 	mpc, err := LoadMultiProfile()
 	if err != nil {
-		// No existing config, create new multi-profile config
+		// No existing config, create new multi-profile config. DefaultProfile
+		// starts empty so the first-profile promotion below makes whichever
+		// profile this save actually creates the default — pre-seeding
+		// "default" here would leave a dangling DefaultProfile (and an empty
+		// top-level compat mirror) when the first save targets a named
+		// profile via --profile/SX_PROFILE.
 		mpc = &MultiProfileConfig{
-			DefaultProfile: DefaultProfileName,
-			Profiles:       make(map[string]*Profile),
+			Profiles: make(map[string]*Profile),
 		}
 	}
 
@@ -156,9 +160,16 @@ func SaveToProfile(cfg *Config, profileName string) error {
 	// Update the profile
 	mpc.SetProfile(profileName, ProfileFromConfig(cfg))
 
-	// Update client settings (global setting)
-	mpc.ForceEnabledClients = cfg.ForceEnabledClients
-	mpc.ForceDisabledClients = cfg.ForceDisabledClients
+	// Update client settings (config-wide, not per-profile). A nil slice
+	// means the caller made no client selection — leave the stored lists
+	// untouched, so e.g. an init creating a new profile can't wipe them.
+	// An empty non-nil slice is an explicit clear.
+	if cfg.ForceEnabledClients != nil {
+		mpc.ForceEnabledClients = cfg.ForceEnabledClients
+	}
+	if cfg.ForceDisabledClients != nil {
+		mpc.ForceDisabledClients = cfg.ForceDisabledClients
+	}
 
 	// If this is the first profile, make it the default
 	if mpc.DefaultProfile == "" {

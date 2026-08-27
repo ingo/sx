@@ -30,7 +30,8 @@ import (
 // Returns nil if selectedClients is nil/empty (meaning all detected clients enabled),
 // or if all detected clients are in the selected list.
 func computeDisabledClients(selectedClients []string) []string {
-	// nil/empty selection means "all detected clients enabled" - no disabled list needed
+	// nil/empty means no selection was made — return nil so the config save
+	// leaves the stored list untouched (SaveToProfile's nil = don't touch).
 	if len(selectedClients) == 0 {
 		return nil
 	}
@@ -39,11 +40,10 @@ func computeDisabledClients(selectedClients []string) []string {
 	registry := clients.Global()
 	detectedClients := registry.DetectInstalled()
 
-	if len(detectedClients) == 0 {
-		return nil
-	}
-
-	var disabled []string
+	// An explicit selection always returns a non-nil slice: enabling every
+	// detected client must CLEAR a previously stored disabled list, not
+	// preserve it.
+	disabled := []string{}
 	for _, client := range detectedClients {
 		if !slices.Contains(selectedClients, client.ID()) {
 			disabled = append(disabled, client.ID())
@@ -124,6 +124,11 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL, pa
 	var enabledClients []string
 
 	if nonInteractive {
+		// An absent --clients flag leaves enabledClients nil ("no selection"),
+		// which flows through computeDisabledClients as a nil list that
+		// SaveToProfile leaves untouched — the existing enable/disable state
+		// survives without any clobber-and-restore. An explicit --clients
+		// (including "all", expanded by parseClientsFlag) rebuilds the lists.
 		enabledClients = flagClients
 		err = runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients)
 	} else {
@@ -693,8 +698,18 @@ func expandPath(path string) (string, error) {
 // parseClientsFlag parses the --clients flag value and validates client IDs
 // Returns nil for "all" or empty string (meaning all detected clients)
 func parseClientsFlag(clientsFlag string) ([]string, error) {
-	if clientsFlag == "" || strings.ToLower(clientsFlag) == "all" {
-		return nil, nil // nil means all detected clients
+	if clientsFlag == "" {
+		return nil, nil // nil means no selection was made
+	}
+	if strings.ToLower(clientsFlag) == "all" {
+		// "all" is an explicit selection of every detected client — expand it
+		// so downstream (computeDisabledClients, hook install) treats it as a
+		// real selection rather than "no opinion".
+		var all []string
+		for _, c := range clients.Global().DetectInstalled() {
+			all = append(all, c.ID())
+		}
+		return all, nil
 	}
 
 	parts := strings.Split(clientsFlag, ",")
@@ -869,6 +884,12 @@ func promptBootstrapOptions(cmd *cobra.Command, ctx context.Context, enabledClie
 	for _, client := range installedClients {
 		// Skip if not in enabled set (when set is defined)
 		if enabledSet != nil && !enabledSet[client.ID()] {
+			continue
+		}
+		// Even with no explicit selection, ignore force-disabled clients —
+		// mirrors the hook-installation guard so both paths agree on what
+		// "disabled" means.
+		if enabledSet == nil && !cfg.IsClientEnabled(client.ID()) {
 			continue
 		}
 		if clientOpts := client.GetBootstrapOptions(ctx); clientOpts != nil {
