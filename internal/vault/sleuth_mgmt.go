@@ -147,7 +147,12 @@ func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.Li
 	for {
 		resp, err := vaultgql.OrgRepositories(ctx, s.gqlClient(), pageSize, after)
 		if err != nil {
-			logger.Get().Warn("could not resolve repository providers; team repos keep bare owner/name slugs", "error", err)
+			logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
+			// A stale cache still qualifies the repos it does know about —
+			// strictly better than degrading every slug on a failed refetch.
+			if s.repoProvidersFetched {
+				return s.repoProviders
+			}
 			return nil
 		}
 		conn := resp.Organization.Repositories
