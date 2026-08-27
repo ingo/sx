@@ -3,7 +3,9 @@
 Move everything in one vault into another — assets and all their versions,
 teams, bots, installation scopes, audit history, and usage history. The source
 and destination can be any backend, so you can convert a skills.new vault into a
-git vault (or vice versa) without leaving the contents behind.
+git vault (or vice versa) without leaving the contents behind. For the full
+step-by-step skills.new exit path, see
+[Migrating from app.skills.new to a git vault](migrate-from-skills-new.md).
 
 ```bash
 sx vault copy --from <profile> --to <profile> [--only ...] [--dry-run] [--yes]
