@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"os"
+	"slices"
 
 	"github.com/sleuth-io/sx/v2/internal/bootstrap"
 	"github.com/sleuth-io/sx/v2/internal/clients"
@@ -53,8 +54,11 @@ func installSelectedClientHooks(ctx context.Context, out *outputHelper, enabledC
 			log.Debug("skipping hook installation for disabled client", "client", client.ID())
 			continue
 		}
-		// Even with no explicit selection, never touch a force-disabled client.
-		if enabledClientSet == nil && cfg != nil && !cfg.IsClientEnabled(client.ID()) {
+		// Even with no explicit selection, never touch a force-disabled
+		// client. Keyed on mpc (config-wide lists, no profile resolution)
+		// rather than cfg, which is nil whenever config.Load can't resolve
+		// the active profile — the guard must not fall open in that state.
+		if enabledClientSet == nil && slices.Contains(mpc.ForceDisabledClients, client.ID()) {
 			log.Debug("skipping hook installation for force-disabled client", "client", client.ID())
 			continue
 		}

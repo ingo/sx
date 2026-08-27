@@ -36,8 +36,11 @@ func formatTarget(t vault.InstallTarget) string {
 // formatTarget so two distinct targets that happen to render to the same string
 // don't collapse, and a path target whose Paths differ only in order isn't
 // mistaken for a different target. The repo component is normalized so a
-// server-qualified row ("github.com/acme/tools") and the slug or URL a user
-// types for the same repository don't diff as distinct targets.
+// server-qualified row ("github.com/acme/tools") and a URL a user types for
+// the same repository ("https://github.com/acme/tools",
+// "git@github.com:acme/tools.git") don't diff as distinct targets. A bare
+// "acme/tools" slug still keys separately — it carries no host, and inventing
+// one here could collapse genuinely different repositories.
 func targetKey(t vault.InstallTarget) string {
 	paths := append([]string(nil), t.Paths...)
 	slices.Sort(paths)

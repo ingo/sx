@@ -148,31 +148,81 @@ func (s *SleuthVault) fetchOrgRepos(ctx context.Context) ([]orgRepoRow, error) {
 }
 
 // orgRepoRows returns the cached org repository listing, fetching it on
-// first use (or when refresh forces a refetch, used by callers that missed a
-// lookup and must rule out staleness). fresh reports whether the returned
-// rows come from a fetch this call performed. On a fetch failure the
-// previously cached rows are returned alongside the error so callers can
-// degrade instead of losing data they already had.
-func (s *SleuthVault) orgRepoRows(ctx context.Context, refresh bool) (rows []orgRepoRow, fresh bool, err error) {
+// first use. fresh reports whether the returned rows come from a fetch, and
+// gen identifies the cache generation for refreshOrgRepos coalescing. On a
+// fetch failure the previously cached rows are returned alongside the error
+// so callers can degrade instead of losing data they already had.
+func (s *SleuthVault) orgRepoRows(ctx context.Context) (rows []orgRepoRow, fresh bool, gen uint64, err error) {
 	s.orgReposMu.Lock()
 	defer s.orgReposMu.Unlock()
-	if s.orgReposFetched && !refresh {
-		return s.orgRepos, false, nil
+	if s.orgReposFetched {
+		return s.orgRepos, false, s.orgReposGen, nil
 	}
+	return s.refetchOrgReposLocked(ctx)
+}
+
+// refreshOrgRepos refetches the listing for a caller that missed a lookup in
+// generation sinceGen — unless another caller already refreshed the cache in
+// the meantime, in which case the newer rows are returned without re-paging
+// (they count as fresh: they postdate the observation that missed).
+func (s *SleuthVault) refreshOrgRepos(ctx context.Context, sinceGen uint64) (rows []orgRepoRow, fresh bool, gen uint64, err error) {
+	s.orgReposMu.Lock()
+	defer s.orgReposMu.Unlock()
+	if s.orgReposFetched && s.orgReposGen != sinceGen {
+		return s.orgRepos, true, s.orgReposGen, nil
+	}
+	return s.refetchOrgReposLocked(ctx)
+}
+
+func (s *SleuthVault) refetchOrgReposLocked(ctx context.Context) ([]orgRepoRow, bool, uint64, error) {
 	fetched, err := s.fetchOrgRepos(ctx)
 	if err != nil {
-		return s.orgRepos, false, err
+		return s.orgRepos, false, s.orgReposGen, err
 	}
 	s.orgRepos, s.orgReposFetched = fetched, true
-	return fetched, true, nil
+	s.orgReposGen++
+	return fetched, true, s.orgReposGen, nil
+}
+
+// orgRepoMissUnproven reports whether any key is absent from present without
+// a fresh listing having already disproved it (see recordOrgRepoMisses).
+// prefix namespaces the shared miss set: "id:" for GIDs, "name:" for
+// owner/name slugs.
+func (s *SleuthVault) orgRepoMissUnproven(prefix string, keys []string, present map[string]string) bool {
+	s.orgReposMu.Lock()
+	defer s.orgReposMu.Unlock()
+	for _, k := range keys {
+		if _, ok := present[k]; ok {
+			continue
+		}
+		if _, miss := s.orgRepoMisses[prefix+k]; !miss {
+			return true
+		}
+	}
+	return false
+}
+
+// recordOrgRepoMisses negative-caches requested keys a fresh, error-free org
+// listing did not resolve, so a permanently unresolvable key (deleted or
+// access-filtered repo) can't force a re-pagination on every lookup.
+func (s *SleuthVault) recordOrgRepoMisses(prefix string, keys []string, present map[string]string) {
+	s.orgReposMu.Lock()
+	defer s.orgReposMu.Unlock()
+	for _, k := range keys {
+		if _, ok := present[k]; !ok {
+			if s.orgRepoMisses == nil {
+				s.orgRepoMisses = map[string]struct{}{}
+			}
+			s.orgRepoMisses[prefix+k] = struct{}{}
+		}
+	}
 }
 
 // repoProvidersByID returns a repository GID -> provider map covering the
 // given teams' repositories, backed by the shared org repo cache. A GID
-// absent from the cache triggers at most one refetch; GIDs a fresh listing
-// still doesn't return (deleted or access-filtered repos) are negative-cached
-// so they can't force a re-pagination on every call. A fetch failure degrades
-// to bare owner/name slugs rather than failing the listing.
+// absent from the cache triggers at most one refetch ever (misses are
+// negative-cached). A fetch failure degrades to bare owner/name slugs rather
+// than failing the listing.
 func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) map[string]string {
 	var repoIDs []string
 	for _, n := range nodes {
@@ -183,64 +233,30 @@ func (s *SleuthVault) repoProvidersByID(ctx context.Context, nodes []vaultgql.Li
 	if len(repoIDs) == 0 {
 		return nil
 	}
-	rows, fresh, err := s.orgRepoRows(ctx, false)
+	providerMap := func(rows []orgRepoRow) map[string]string {
+		m := make(map[string]string, len(rows))
+		for _, r := range rows {
+			m[r.GID] = r.Provider
+		}
+		return m
+	}
+	rows, fresh, gen, err := s.orgRepoRows(ctx)
 	if err != nil {
 		logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
 	}
-	providers := make(map[string]string, len(rows))
-	for _, r := range rows {
-		providers[r.GID] = r.Provider
-	}
-	if err != nil || fresh {
-		s.recordOrgRepoMisses(repoIDs, providers, err == nil)
-		return providers
-	}
-	// Cache hit with a gap: refetch once unless a fresh listing already
-	// proved the GID unresolvable.
-	missing := false
-	s.orgReposMu.Lock()
-	for _, id := range repoIDs {
-		if _, ok := providers[id]; ok {
-			continue
-		}
-		if _, miss := s.orgRepoMisses[id]; !miss {
-			missing = true
-			break
+	providers := providerMap(rows)
+	if err == nil && !fresh && s.orgRepoMissUnproven("id:", repoIDs, providers) {
+		rows, fresh, _, err = s.refreshOrgRepos(ctx, gen)
+		if err != nil {
+			logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
+		} else {
+			providers = providerMap(rows)
 		}
 	}
-	s.orgReposMu.Unlock()
-	if !missing {
-		return providers
+	if err == nil && fresh {
+		s.recordOrgRepoMisses("id:", repoIDs, providers)
 	}
-	rows, _, err = s.orgRepoRows(ctx, true)
-	if err != nil {
-		logger.Get().Warn("could not resolve repository providers; unresolved team repos keep bare owner/name slugs", "error", err)
-	}
-	providers = make(map[string]string, len(rows))
-	for _, r := range rows {
-		providers[r.GID] = r.Provider
-	}
-	s.recordOrgRepoMisses(repoIDs, providers, err == nil)
 	return providers
-}
-
-// recordOrgRepoMisses negative-caches requested GIDs a fresh org listing did
-// not resolve. Only called with resolved=true after an error-free fetch — a
-// failed fetch proves nothing about the GIDs.
-func (s *SleuthVault) recordOrgRepoMisses(repoIDs []string, providers map[string]string, resolved bool) {
-	if !resolved {
-		return
-	}
-	s.orgReposMu.Lock()
-	defer s.orgReposMu.Unlock()
-	for _, id := range repoIDs {
-		if _, ok := providers[id]; !ok {
-			if s.orgRepoMisses == nil {
-				s.orgRepoMisses = map[string]struct{}{}
-			}
-			s.orgRepoMisses[id] = struct{}{}
-		}
-	}
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
@@ -520,31 +536,30 @@ func unqualifyProviderRepo(repo string) string {
 // or slugs) to the GIDs updateTeam needs. When any of needKeys (already in
 // owner/name form) is absent from the cached listing, the listing is
 // refetched once so a repository connected after the first fetch still
-// resolves; a key missing from a fresh listing is genuinely unknown.
+// resolves; keys a fresh listing already failed to resolve are
+// negative-cached and don't trigger another refetch.
 func (s *SleuthVault) orgRepoGIDsByOwnerName(ctx context.Context, needKeys ...string) (map[string]string, error) {
-	rows, fresh, err := s.orgRepoRows(ctx, false)
+	gidMap := func(rows []orgRepoRow) map[string]string {
+		m := make(map[string]string, len(rows))
+		for _, r := range rows {
+			m[r.OwnerName] = r.GID
+		}
+		return m
+	}
+	rows, fresh, gen, err := s.orgRepoRows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	gids := make(map[string]string, len(rows))
-	for _, r := range rows {
-		gids[r.OwnerName] = r.GID
-	}
-	if !fresh {
-		for _, key := range needKeys {
-			if _, ok := gids[key]; ok {
-				continue
-			}
-			rows, _, err = s.orgRepoRows(ctx, true)
-			if err != nil {
-				return nil, err
-			}
-			gids = make(map[string]string, len(rows))
-			for _, r := range rows {
-				gids[r.OwnerName] = r.GID
-			}
-			break
+	gids := gidMap(rows)
+	if !fresh && s.orgRepoMissUnproven("name:", needKeys, gids) {
+		rows, fresh, _, err = s.refreshOrgRepos(ctx, gen)
+		if err != nil {
+			return nil, err
 		}
+		gids = gidMap(rows)
+	}
+	if fresh {
+		s.recordOrgRepoMisses("name:", needKeys, gids)
 	}
 	return gids, nil
 }
@@ -576,9 +591,9 @@ func (s *SleuthVault) SetAssetInstallation(ctx context.Context, assetName string
 	case InstallKindOrg:
 		return s.setAssetInstallationsGraphQL(ctx, assetName, nil, false, nil, false)
 	case InstallKindRepo:
-		return s.setAssetInstallationsGraphQL(ctx, assetName, []vaultgql.RepositoryInstallationInput{{Url: target.Repo}}, false, nil, false)
+		return s.setAssetInstallationsGraphQL(ctx, assetName, []vaultgql.RepositoryInstallationInput{{Url: unqualifyProviderRepo(target.Repo)}}, false, nil, false)
 	case InstallKindPath:
-		return s.setAssetInstallationsGraphQL(ctx, assetName, []vaultgql.RepositoryInstallationInput{{Url: target.Repo, Paths: target.Paths}}, false, nil, false)
+		return s.setAssetInstallationsGraphQL(ctx, assetName, []vaultgql.RepositoryInstallationInput{{Url: unqualifyProviderRepo(target.Repo), Paths: target.Paths}}, false, nil, false)
 	case InstallKindUser:
 		// The setAssetInstallations `installations` input now accepts an explicit
 		// USER target by GID, so we can scope to any user in the org (not just the

@@ -24,41 +24,14 @@ import (
 	"github.com/sleuth-io/sx/v2/internal/vault"
 )
 
-// runInitNonInteractivePreservingClients runs the non-interactive init and,
-// when keepFrom is non-nil (a pre-existing config snapshot, taken because no
-// --clients flag was given), restores its config-wide client enable/disable
-// lists afterwards. The init save paths rebuild those lists from the (empty)
-// selection, so without the restore a non-interactive `sx init` — e.g. one
-// creating a new profile via SX_PROFILE — would silently re-enable every
-// force-disabled client. An explicit selection (a --clients flag, including
-// "all") passes keepFrom nil so the rebuilt lists win. The snapshot is a
-// MultiProfileConfig rather than a resolved profile Config: the lists are
-// config-wide, and per-profile resolution can fail (dangling defaultProfile)
-// even when the lists themselves are perfectly readable.
-func runInitNonInteractivePreservingClients(cmd *cobra.Command, ctx context.Context, repoType, serverURL, repoURL, pathFlag string, enabledClients []string, keepFrom *config.MultiProfileConfig) error {
-	keep := enabledClients == nil && keepFrom != nil
-	if err := runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients); err != nil {
-		return err
-	}
-	if !keep {
-		return nil
-	}
-	mpc, err := config.LoadMultiProfile()
-	if err != nil {
-		return err
-	}
-	mpc.ForceEnabledClients = keepFrom.ForceEnabledClients
-	mpc.ForceDisabledClients = keepFrom.ForceDisabledClients
-	return config.SaveMultiProfile(mpc)
-}
-
 // computeDisabledClients returns the list of client IDs that should be disabled.
 // It only considers DETECTED clients - if a client isn't detected, we don't
 // add it to the disabled list (it's just not present, not explicitly disabled).
 // Returns nil if selectedClients is nil/empty (meaning all detected clients enabled),
 // or if all detected clients are in the selected list.
 func computeDisabledClients(selectedClients []string) []string {
-	// nil/empty selection means "all detected clients enabled" - no disabled list needed
+	// nil/empty means no selection was made — return nil so the config save
+	// leaves the stored list untouched (SaveToProfile's nil = don't touch).
 	if len(selectedClients) == 0 {
 		return nil
 	}
@@ -67,11 +40,10 @@ func computeDisabledClients(selectedClients []string) []string {
 	registry := clients.Global()
 	detectedClients := registry.DetectInstalled()
 
-	if len(detectedClients) == 0 {
-		return nil
-	}
-
-	var disabled []string
+	// An explicit selection always returns a non-nil slice: enabling every
+	// detected client must CLEAR a previously stored disabled list, not
+	// preserve it.
+	disabled := []string{}
 	for _, client := range detectedClients {
 		if !slices.Contains(selectedClients, client.ID()) {
 			disabled = append(disabled, client.ID())
@@ -152,14 +124,13 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL, pa
 	var enabledClients []string
 
 	if nonInteractive {
+		// An absent --clients flag leaves enabledClients nil ("no selection"),
+		// which flows through computeDisabledClients as a nil list that
+		// SaveToProfile leaves untouched — the existing enable/disable state
+		// survives without any clobber-and-restore. An explicit --clients
+		// (including "all", expanded by parseClientsFlag) rebuilds the lists.
 		enabledClients = flagClients
-		// An explicit --clients (including "all") is a client selection; only
-		// an absent flag preserves the existing enable/disable state.
-		var keepFrom *config.MultiProfileConfig
-		if clientsFlag == "" {
-			keepFrom, _ = config.LoadMultiProfile()
-		}
-		err = runInitNonInteractivePreservingClients(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients, keepFrom)
+		err = runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL, pathFlag, enabledClients)
 	} else {
 		enabledClients, err = runInitInteractive(cmd, ctx, existingCfg, flagClients)
 	}
@@ -727,8 +698,18 @@ func expandPath(path string) (string, error) {
 // parseClientsFlag parses the --clients flag value and validates client IDs
 // Returns nil for "all" or empty string (meaning all detected clients)
 func parseClientsFlag(clientsFlag string) ([]string, error) {
-	if clientsFlag == "" || strings.ToLower(clientsFlag) == "all" {
-		return nil, nil // nil means all detected clients
+	if clientsFlag == "" {
+		return nil, nil // nil means no selection was made
+	}
+	if strings.ToLower(clientsFlag) == "all" {
+		// "all" is an explicit selection of every detected client — expand it
+		// so downstream (computeDisabledClients, hook install) treats it as a
+		// real selection rather than "no opinion".
+		var all []string
+		for _, c := range clients.Global().DetectInstalled() {
+			all = append(all, c.ID())
+		}
+		return all, nil
 	}
 
 	parts := strings.Split(clientsFlag, ",")

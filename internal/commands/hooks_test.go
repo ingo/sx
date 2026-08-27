@@ -13,33 +13,46 @@ import (
 // A nil selection means "all detected clients" — except force-disabled ones,
 // which hook installation must never touch (GitHub Copilot's hook file lands
 // in the CURRENT REPO's .github/, so touching a disabled client also pollutes
-// whatever repo the command runs from).
+// whatever repo the command runs from). The guard must hold even when the
+// active profile can't be resolved (dangling defaultProfile): it reads the
+// config-wide lists, not a resolved profile.
 func TestInstallSelectedClientHooks_SkipsForceDisabled(t *testing.T) {
-	env := NewTestEnv(t)
-	workDir := env.MkdirAll(filepath.Join(env.TempDir, "work"))
-	env.Chdir(workDir)
+	cases := []struct {
+		name           string
+		defaultProfile string // "" seeds a dangling defaultProfile
+	}{
+		{"resolvable profile", `"defaultProfile": "default",`},
+		{"dangling defaultProfile", `"defaultProfile": "ghost",`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := NewTestEnv(t)
+			workDir := env.MkdirAll(filepath.Join(env.TempDir, "work"))
+			env.Chdir(workDir)
 
-	vaultDir := env.SetupPathVault()
-	env.WriteFile(
-		filepath.Join(env.HomeDir, ".config", "sx", "config.json"),
-		`{
+			vaultDir := env.SetupPathVault()
+			env.WriteFile(
+				filepath.Join(env.HomeDir, ".config", "sx", "config.json"),
+				`{
   "type": "path",
   "repositoryUrl": "file://`+vaultDir+`",
-  "defaultProfile": "default",
+  `+tc.defaultProfile+`
   "profiles": {
     "default": {"type": "path", "repositoryUrl": "file://`+vaultDir+`"}
   },
   "forceDisabledClients": ["github-copilot"]
 }`,
-	)
+			)
 
-	cmd := &cobra.Command{}
-	installSelectedClientHooks(context.Background(), newOutputHelper(cmd), nil)
+			cmd := &cobra.Command{}
+			installSelectedClientHooks(context.Background(), newOutputHelper(cmd), nil)
 
-	// Enabled client got its hooks (positive control that installation ran).
-	env.AssertFileExists(filepath.Join(env.HomeDir, ".claude", "settings.json"))
-	// The force-disabled client was never touched.
-	env.AssertFileNotExists(filepath.Join(workDir, ".github", "hooks", "sx.json"))
+			// Enabled client got its hooks (positive control that installation ran).
+			env.AssertFileExists(filepath.Join(env.HomeDir, ".claude", "settings.json"))
+			// The force-disabled client was never touched.
+			env.AssertFileNotExists(filepath.Join(workDir, ".github", "hooks", "sx.json"))
+		})
+	}
 }
 
 // The --clients flag is an explicit selection even as "all": it rebuilds the
