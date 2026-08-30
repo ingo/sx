@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"strings"
 	"sync"
+
+	gogit "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 )
 
 // ErrIdentityNotSet is returned when no git email or fallback identity can
@@ -249,17 +251,46 @@ func ResetActorCache() {
 	actorCache = make(map[actorCacheKey]Actor)
 }
 
+// readGitConfig reads a "section.key" git config value (e.g. "user.email"),
+// matching `git config --get key` run inside repoPath: the repo's local
+// config wins, falling back to the user's global config, with no
+// dependency on a system git binary. repoPath == "" (or not a usable
+// repository) reads just the global config, mirroring the exec-based
+// behavior this replaces when run outside any repository.
 func readGitConfig(ctx context.Context, repoPath, key string) string {
-	args := []string{"config", "--get", key}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if repoPath != "" {
-		cmd.Dir = repoPath
-	}
-	out, err := cmd.Output()
-	if err != nil {
+	cfg := mergedGitConfig(repoPath)
+	if cfg == nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	switch key {
+	case "user.name":
+		return cfg.User.Name
+	case "user.email":
+		return cfg.User.Email
+	}
+	section, option, ok := strings.Cut(key, ".")
+	if !ok {
+		return ""
+	}
+	return cfg.Raw.Section(section).Option(option)
+}
+
+// mergedGitConfig returns repoPath's git config merged with the user's
+// global config (repoPath's values winning), or just the global config
+// when repoPath is empty or not a usable git repository.
+func mergedGitConfig(repoPath string) *gitconfig.Config {
+	if repoPath != "" {
+		if repo, err := gogit.PlainOpen(repoPath); err == nil {
+			if cfg, err := repo.ConfigScoped(gitconfig.GlobalScope); err == nil {
+				return cfg
+			}
+		}
+	}
+	cfg, err := gitconfig.LoadConfig(gitconfig.GlobalScope)
+	if err != nil {
+		return nil
+	}
+	return cfg
 }
 
 // fallbackEmail synthesizes an identifier from `$USER` and the machine
