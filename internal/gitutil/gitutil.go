@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+
+	gogit "github.com/go-git/go-git/v5"
 
 	"github.com/sleuth-io/sx/v2/internal/git"
 )
@@ -68,29 +68,30 @@ func DetectContextForPath(ctx context.Context, path string) (*GitContext, error)
 	}, nil
 }
 
+// openWithParentDetection opens the git repository containing path,
+// searching parent directories the way `git rev-parse` does — plain
+// PlainOpen only ever looks at path itself.
+func openWithParentDetection(path string) (*gogit.Repository, error) {
+	return gogit.PlainOpenWithOptions(path, &gogit.PlainOpenOptions{DetectDotGit: true})
+}
+
 // IsGitRepo checks if the given path is inside a Git repository
 func IsGitRepo(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = path
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-
-	return strings.TrimSpace(string(output)) == "true"
+	_, err := openWithParentDetection(path)
+	return err == nil
 }
 
 // GetRepoRoot returns the root directory of the Git repository
 func GetRepoRoot(ctx context.Context, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = path
-	output, err := cmd.CombinedOutput()
+	repo, err := openWithParentDetection(path)
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	repoRoot := strings.TrimSpace(string(output))
-	return repoRoot, nil
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w", err)
+	}
+	return wt.Filesystem.Root(), nil
 }
 
 // GetRemoteURL returns the remote URL for the repository (typically 'origin')
@@ -107,26 +108,30 @@ func GetCurrentBranch(ctx context.Context, repoPath string) (string, error) {
 
 // GetCurrentCommit returns the current commit SHA
 func GetCurrentCommit(ctx context.Context, repoPath string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = repoPath
-	output, err := cmd.CombinedOutput()
+	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	commit := strings.TrimSpace(string(output))
-	return commit, nil
+	head, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w", err)
+	}
+	return head.Hash().String(), nil
 }
 
 // HasUncommittedChanges checks if there are uncommitted changes in the repository
 func HasUncommittedChanges(ctx context.Context, repoPath string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
-	cmd.Dir = repoPath
-	output, err := cmd.CombinedOutput()
+	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
-		return false, fmt.Errorf("git status failed: %w\nOutput: %s", err, string(output))
+		return false, fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	// If output is empty, there are no changes
-	return len(strings.TrimSpace(string(output))) > 0, nil
+	wt, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree: %w", err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return false, fmt.Errorf("git status failed: %w", err)
+	}
+	return !status.IsClean(), nil
 }
