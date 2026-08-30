@@ -181,7 +181,7 @@ func (a *App) readSecretFallback(id string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path) // #nosec G304 -- path is derived from the sx config dir and a validated id
+	data, err := os.ReadFile(path) // #nosec G304 -- path is derived from the axis config dir and a validated id
 	if os.IsNotExist(err) {
 		return map[string]string{}, nil
 	}

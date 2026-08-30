@@ -14,7 +14,7 @@ type Option struct {
 
 // MCPServerConfig contains info to install an MCP server generically
 type MCPServerConfig struct {
-	Name    string            // Server name (e.g., "sx")
+	Name    string            // Server name (e.g., "axis")
 	Command string            // Command to run
 	Args    []string          // Arguments
 	Env     map[string]string // Environment variables
@@ -37,7 +37,7 @@ var SessionHook = Option{
 	Description: "Session hook - Auto-update assets when sessions start",
 	Prompt:      "Install session hooks? (recommended)",
 	Default:     true,
-	DeclineNote: "Without this hook, you'll need to run 'sx install' manually.",
+	DeclineNote: "Without this hook, you'll need to run 'axis install' manually.",
 }
 
 // AnalyticsHook is the usage tracking hook option.
@@ -63,11 +63,11 @@ func SleuthAIQueryMCP() Option {
 	// handles opt.MCPConfig.
 	return Option{
 		Key:         SleuthAIQueryMCPKey,
-		Description: "Sleuth AI Query MCP - Enables 'sx query' tool for GitHub, CI, Linear, Datadog",
+		Description: "Sleuth AI Query MCP - Enables 'axis query' tool for GitHub, CI, Linear, Datadog",
 		Prompt:      "Install Sleuth AI Query MCP server?",
 		Default:     false,
 		MCPConfig: &MCPServerConfig{
-			Name:    "sx",
+			Name:    "axis",
 			Command: clipath.ResolveOrBare(),
 			Args:    []string{"serve"},
 		},

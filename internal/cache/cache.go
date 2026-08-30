@@ -22,7 +22,7 @@ import (
 // files sort lexicographically in chronological order.
 const lockFileHistorySuffix = "lock"
 
-// GetCacheDir returns the platform-specific cache directory for sx
+// GetCacheDir returns the platform-specific cache directory for axis
 func GetCacheDir() (string, error) {
 	// Check for environment override (support both new and legacy)
 	if cacheDir := os.Getenv("SX_CACHE_DIR"); cacheDir != "" {
@@ -42,7 +42,7 @@ func GetCacheDir() (string, error) {
 		}
 	}
 
-	return filepath.Join(cacheDir, "sx"), nil
+	return filepath.Join(cacheDir, "axis"), nil
 }
 
 // getFallbackCacheDir returns platform-specific fallback cache directories

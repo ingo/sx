@@ -492,8 +492,8 @@ func TestKiroBootstrapInstall(t *testing.T) {
 		if err := json.Unmarshal(spawnHooks[0], &hook); err != nil {
 			t.Fatalf("Failed to parse agentSpawn hook: %v", err)
 		}
-		if hook.Command != "sx install --hook-mode --client=kiro" {
-			t.Errorf("agentSpawn command = %q, want %q", hook.Command, "sx install --hook-mode --client=kiro")
+		if hook.Command != "axis install --hook-mode --client=kiro" {
+			t.Errorf("agentSpawn command = %q, want %q", hook.Command, "axis install --hook-mode --client=kiro")
 		}
 	}
 
@@ -506,8 +506,8 @@ func TestKiroBootstrapInstall(t *testing.T) {
 		if err := json.Unmarshal(postToolHooks[0], &hook); err != nil {
 			t.Fatalf("Failed to parse postToolUse hook: %v", err)
 		}
-		if hook.Command != "sx report-usage --client=kiro" {
-			t.Errorf("postToolUse command = %q, want %q", hook.Command, "sx report-usage --client=kiro")
+		if hook.Command != "axis report-usage --client=kiro" {
+			t.Errorf("postToolUse command = %q, want %q", hook.Command, "axis report-usage --client=kiro")
 		}
 	}
 }

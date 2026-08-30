@@ -87,7 +87,7 @@ func formatInstalledAssetsMessage(installedAssets []hookAssetInfo) string {
 	case 0:
 		return ""
 	case 1:
-		return fmt.Sprintf("%ssx%s installed the %s%s %s%s.",
+		return fmt.Sprintf("%saxis%s installed the %s%s %s%s.",
 			bold, resetBold, blue, installedAssets[0].name, installedAssets[0].typ, reset)
 	default:
 		return formatMultipleAssetsMessage(installedAssets, bold, blue, resetBold, reset)
@@ -97,7 +97,7 @@ func formatInstalledAssetsMessage(installedAssets []hookAssetInfo) string {
 // formatMultipleAssetsMessage formats the message for multiple installed assets
 func formatMultipleAssetsMessage(installedAssets []hookAssetInfo, bold, blue, resetBold, reset string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%ssx%s installed:\n", bold, resetBold)
+	fmt.Fprintf(&sb, "%saxis%s installed:\n", bold, resetBold)
 
 	// Show up to 3 assets
 	displayCount := min(len(installedAssets), 3)

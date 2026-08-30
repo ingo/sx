@@ -14,10 +14,10 @@ func TestGetTrackerPath(t *testing.T) {
 		t.Fatalf("GetTrackerPath() error = %v", err)
 	}
 
-	// Verify it ends with sx/installed.json. The parent cache dir is platform-
+	// Verify it ends with axis/installed.json. The parent cache dir is platform-
 	// specific (.cache on Linux, Library/Caches on macOS, LocalAppData on
 	// Windows) so assert only the suffix we always control.
-	wantSuffix := filepath.Join("sx", "installed.json")
+	wantSuffix := filepath.Join("axis", "installed.json")
 	if !strings.HasSuffix(got, wantSuffix) {
 		t.Errorf("GetTrackerPath() = %q, want path ending with %q", got, wantSuffix)
 	}

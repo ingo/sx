@@ -1201,8 +1201,8 @@ func TestGitHubCopilotBootstrapInstall(t *testing.T) {
 	if !strings.Contains(string(content), "sessionStart") {
 		t.Errorf("Hooks file should contain sessionStart hook, got: %s", content)
 	}
-	if !strings.Contains(string(content), "sx install --hook-mode --client=github-copilot") {
-		t.Errorf("Hooks file should contain sx install command, got: %s", content)
+	if !strings.Contains(string(content), "axis install --hook-mode --client=github-copilot") {
+		t.Errorf("Hooks file should contain axis install command, got: %s", content)
 	}
 	// Verify version field
 	if !strings.Contains(string(content), `"version": 1`) {
@@ -1251,8 +1251,8 @@ func TestGitHubCopilotBootstrapUninstall(t *testing.T) {
 	// (file may still exist with version field but no hooks)
 	content, err := os.ReadFile(hookFile)
 	if err == nil {
-		if strings.Contains(string(content), "sx install") {
-			t.Errorf("Hooks file should not contain sx install after uninstall, got: %s", content)
+		if strings.Contains(string(content), "axis install") {
+			t.Errorf("Hooks file should not contain axis install after uninstall, got: %s", content)
 		}
 	}
 }
@@ -1295,7 +1295,7 @@ func TestGitHubCopilotBootstrapIdempotent(t *testing.T) {
 	}
 
 	// Count occurrences of the command - should only appear once
-	count := strings.Count(string(content), "sx install --hook-mode --client=github-copilot")
+	count := strings.Count(string(content), "axis install --hook-mode --client=github-copilot")
 	if count != 1 {
 		t.Errorf("Expected exactly 1 hook entry, found %d. Content: %s", count, content)
 	}
@@ -1341,8 +1341,8 @@ func TestGitHubCopilotBootstrapMCPInstall(t *testing.T) {
 	}
 
 	// Verify sx server is configured
-	if !strings.Contains(string(content), `"sx"`) {
-		t.Errorf("mcp-config.json should contain sx server entry, got: %s", content)
+	if !strings.Contains(string(content), `"axis"`) {
+		t.Errorf("mcp-config.json should contain axis server entry, got: %s", content)
 	}
 
 	// Verify it has the serve command
@@ -1392,7 +1392,7 @@ func TestGitHubCopilotBootstrapMCPDualTarget(t *testing.T) {
 	if !strings.Contains(string(copilotContent), `"mcpServers"`) {
 		t.Errorf("Copilot config should use mcpServers key, got: %s", copilotContent)
 	}
-	if !strings.Contains(string(copilotContent), `"sx"`) {
+	if !strings.Contains(string(copilotContent), `"axis"`) {
 		t.Errorf("Copilot config should contain sx server, got: %s", copilotContent)
 	}
 
@@ -1407,7 +1407,7 @@ func TestGitHubCopilotBootstrapMCPDualTarget(t *testing.T) {
 	if !strings.Contains(string(vscodeContent), `"servers"`) {
 		t.Errorf("VS Code config should use servers key, got: %s", vscodeContent)
 	}
-	if !strings.Contains(string(vscodeContent), `"sx"`) {
+	if !strings.Contains(string(vscodeContent), `"axis"`) {
 		t.Errorf("VS Code config should contain sx server, got: %s", vscodeContent)
 	}
 }
@@ -1444,10 +1444,10 @@ func TestGitHubCopilotBootstrapMCPUninstall(t *testing.T) {
 		t.Fatalf("Failed to uninstall bootstrap: %v", err)
 	}
 
-	// Verify sx server was removed from config
+	// Verify axis server was removed from config
 	content, err := os.ReadFile(mcpConfigPath)
-	if err == nil && strings.Contains(string(content), `"sx"`) {
-		t.Errorf("mcp-config.json should not contain sx server after uninstall, got: %s", content)
+	if err == nil && strings.Contains(string(content), `"axis"`) {
+		t.Errorf("mcp-config.json should not contain axis server after uninstall, got: %s", content)
 	}
 }
 
@@ -1494,8 +1494,8 @@ path = "assets/test-skill/1.0.0"
 	if err != nil {
 		t.Fatalf("Failed to read Claude settings: %v", err)
 	}
-	if !strings.Contains(string(claudeSettings), "sx install") {
-		t.Errorf("Claude Code hooks should be installed, but settings.json doesn't contain 'sx install': %s", claudeSettings)
+	if !strings.Contains(string(claudeSettings), "axis install") {
+		t.Errorf("Claude Code hooks should be installed, but settings.json doesn't contain 'axis install': %s", claudeSettings)
 	}
 
 	// Verify GitHub Copilot hooks were NOT installed (no .github/hooks/sx.json)
@@ -1562,8 +1562,8 @@ path = "assets/test-skill/1.0.0"
 	if err != nil {
 		t.Fatalf("Copilot hooks should be installed, but failed to read %s: %v", copilotHooksPath, err)
 	}
-	if !strings.Contains(string(copilotHooks), "sx install") {
-		t.Errorf("Copilot hooks should contain 'sx install', got: %s", copilotHooks)
+	if !strings.Contains(string(copilotHooks), "axis install") {
+		t.Errorf("Copilot hooks should contain 'axis install', got: %s", copilotHooks)
 	}
 
 	// Verify Claude Code hooks were NOT modified (should still be empty {})
@@ -1571,8 +1571,8 @@ path = "assets/test-skill/1.0.0"
 	if err != nil {
 		t.Fatalf("Failed to read Claude settings: %v", err)
 	}
-	if strings.Contains(string(claudeSettings), "sx install") {
-		t.Errorf("Claude Code hooks should NOT be installed when --client=github-copilot, but settings.json contains 'sx install': %s", claudeSettings)
+	if strings.Contains(string(claudeSettings), "axis install") {
+		t.Errorf("Claude Code hooks should NOT be installed when --client=github-copilot, but settings.json contains 'axis install': %s", claudeSettings)
 	}
 
 	// Verify assets ARE installed for Copilot (the specified client)

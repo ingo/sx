@@ -481,7 +481,7 @@ type ImportResult struct {
 
 // ImportDraftsFromFolder opens a directory picker and batch-creates one
 // draft per skill-shaped entry found: subdirectories containing a
-// SKILL.md (a .claude/skills layout or an sx vault assets dir), plus
+// SKILL.md (a .claude/skills layout or an axis vault assets dir), plus
 // loose top-level markdown files (a folder of prompts, an Obsidian
 // folder). Everything lands as DRAFTS — the human reviews and publishes.
 // Serves the Importer built-in through the drafts:write capability.
@@ -629,8 +629,8 @@ func (a *App) addExtensionFrom(dir string) (string, string, error) {
 	if err := validatePluginID(pm.ID); err != nil {
 		return "", "", err
 	}
-	if pm.ID == "sx" || strings.HasPrefix(pm.ID, "sx-") {
-		return "", "", errors.New(`extension ids may not claim the "sx" prefix`)
+	if pm.ID == "axis" || strings.HasPrefix(pm.ID, "axis-") {
+		return "", "", errors.New(`extension ids may not claim the "axis" prefix`)
 	}
 	if pm.Name == "" || pm.Version == "" {
 		return "", "", errors.New("plugin.json needs name and version")

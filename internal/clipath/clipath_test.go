@@ -359,7 +359,7 @@ func TestResolveMixedCaseInvocation(t *testing.T) {
 	t.Setenv(EnvOverride, "")
 	dir := tempRoot(t)
 	t.Setenv("PATH", dir)
-	want := writeFakeCLI(t, dir, "SX")
+	want := writeFakeCLI(t, dir, "AXIS")
 	stubExecutable(t, want)
 	stubInstallDirs(t, nil)
 
@@ -457,17 +457,17 @@ func TestCommandQuotesPathsWithSpaces(t *testing.T) {
 
 // Resolution failure must degrade to the legacy bare-"sx" form, not error out
 // of installing a hook entirely.
-func TestCommandFallsBackToBareSx(t *testing.T) {
+func TestCommandFallsBackToBareAxis(t *testing.T) {
 	t.Setenv(EnvOverride, filepath.Join(tempRoot(t), "definitely-absent"))
 	t.Setenv("PATH", tempRoot(t))
-	stubExecutable(t, filepath.Join(tempRoot(t), "sx-app"))
+	stubExecutable(t, filepath.Join(tempRoot(t), "axis-app"))
 	stubInstallDirs(t, nil)
 
 	cmd, err := Command("install", "--hook-mode")
 	if err == nil {
 		t.Fatal("expected ErrNotFound when no CLI exists")
 	}
-	if cmd != "sx install --hook-mode" {
+	if cmd != "axis install --hook-mode" {
 		t.Fatalf("fallback = %q, want the bare form", cmd)
 	}
 }
@@ -685,16 +685,16 @@ func TestNeedsRepairUnquotedWindowsGUIPath(t *testing.T) {
 func TestResolveOrBareUsesPlatformBinaryName(t *testing.T) {
 	t.Setenv(EnvOverride, filepath.Join(tempRoot(t), "absent"))
 	t.Setenv("PATH", tempRoot(t))
-	stubExecutable(t, filepath.Join(tempRoot(t), "sx-app"))
+	stubExecutable(t, filepath.Join(tempRoot(t), "axis-app"))
 	stubInstallDirs(t, nil)
 
 	stubGOOS(t, "windows")
-	if got := ResolveOrBare(); got != "sx.exe" {
-		t.Fatalf("windows fallback = %q, want sx.exe", got)
+	if got := ResolveOrBare(); got != "axis.exe" {
+		t.Fatalf("windows fallback = %q, want axis.exe", got)
 	}
 	stubGOOS(t, "darwin")
-	if got := ResolveOrBare(); got != "sx" {
-		t.Fatalf("posix fallback = %q, want sx", got)
+	if got := ResolveOrBare(); got != "axis" {
+		t.Fatalf("posix fallback = %q, want axis", got)
 	}
 }
 

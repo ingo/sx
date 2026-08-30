@@ -16,7 +16,9 @@ const (
 	// CLI agent config file name - use default.json so skills still work
 	cliAgentFile = "default.json"
 	// IDE hook file name
-	ideHookReportUsage = "sx-report-usage.kiro.hook"
+	ideHookReportUsage = "axis-report-usage.kiro.hook"
+	// legacyIDEHookReportUsage predates the rename to axis; cleaned up on uninstall.
+	legacyIDEHookReportUsage = "sx-report-usage.kiro.hook"
 )
 
 // CLIHookCommand represents a single hook command in CLI format
@@ -83,9 +85,10 @@ func installKiroCLIHooks(repoRoot string, opts []bootstrap.Option) error {
 
 	// Install agentSpawn hook for auto-update (if enabled)
 	if bootstrap.ContainsKey(opts, bootstrap.SessionHookKey) {
-		if !hasHookCommand(config, "agentSpawn", "sx install") {
+		if !hasHookCommand(config, "agentSpawn", "axis install") {
+			removeHook(config, "agentSpawn", "sx install") // upgrade the legacy pre-rename hook in place
 			addHook(config, "agentSpawn", CLIHookCommand{
-				Command: "sx install --hook-mode --client=kiro",
+				Command: "axis install --hook-mode --client=kiro",
 			})
 			log.Info("CLI hook installed", "hook", "agentSpawn", "file", cliAgentFile)
 			modified = true
@@ -94,9 +97,10 @@ func installKiroCLIHooks(repoRoot string, opts []bootstrap.Option) error {
 
 	// Install postToolUse hook for usage tracking (if enabled)
 	if bootstrap.ContainsKey(opts, bootstrap.AnalyticsHookKey) {
-		if !hasHookCommand(config, "postToolUse", "sx report-usage") {
+		if !hasHookCommand(config, "postToolUse", "axis report-usage") {
+			removeHook(config, "postToolUse", "sx report-usage") // upgrade the legacy pre-rename hook in place
 			addHook(config, "postToolUse", CLIHookCommand{
-				Command: "sx report-usage --client=kiro",
+				Command: "axis report-usage --client=kiro",
 			})
 			log.Info("CLI hook installed", "hook", "postToolUse", "file", cliAgentFile)
 			modified = true
@@ -130,9 +134,15 @@ func installKiroIDEHooks(repoRoot string, opts []bootstrap.Option) error {
 	// Install postToolUse hook for usage tracking (if enabled)
 	if bootstrap.ContainsKey(opts, bootstrap.AnalyticsHookKey) {
 		hookPath := filepath.Join(hooksDir, ideHookReportUsage)
-		if !ideHookFileHasCommand(hookPath, "sx report-usage") {
+		if !ideHookFileHasCommand(hookPath, "axis report-usage") {
+			// Remove the legacy pre-rename file too — leaving it behind would
+			// fire both hooks and double-report usage, not just leave a stale file.
+			legacyPath := filepath.Join(hooksDir, legacyIDEHookReportUsage)
+			if err := os.Remove(legacyPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove legacy %s: %w", legacyIDEHookReportUsage, err)
+			}
 			hook := IDEHookFile{
-				Name:        "sx report-usage",
+				Name:        "axis report-usage",
 				Version:     "1.0.0",
 				Description: "Track skill usage for analytics",
 				When: IDEHookWhen{
@@ -141,7 +151,7 @@ func installKiroIDEHooks(repoRoot string, opts []bootstrap.Option) error {
 				},
 				Then: IDEHookThen{
 					Type:    "runCommand",
-					Command: "sx report-usage --client=kiro",
+					Command: "axis report-usage --client=kiro",
 				},
 			}
 			if err := writeIDEHookFile(hookPath, hook); err != nil {
@@ -159,7 +169,7 @@ func installKiroIDEHooks(repoRoot string, opts []bootstrap.Option) error {
 	return nil
 }
 
-// uninstallKiroHooks removes sx hooks from both CLI and IDE locations
+// uninstallKiroHooks removes axis hooks from both CLI and IDE locations
 func uninstallKiroHooks(repoRoot string, uninstallSession, uninstallAnalytics bool) error {
 	if err := uninstallKiroCLIHooks(repoRoot, uninstallSession, uninstallAnalytics); err != nil {
 		return err
@@ -170,7 +180,7 @@ func uninstallKiroHooks(repoRoot string, uninstallSession, uninstallAnalytics bo
 	return nil
 }
 
-// uninstallKiroCLIHooks removes sx hooks from {repoRoot}/.kiro/agents/
+// uninstallKiroCLIHooks removes axis hooks from {repoRoot}/.kiro/agents/
 func uninstallKiroCLIHooks(repoRoot string, uninstallSession, uninstallAnalytics bool) error {
 	agentsDir := filepath.Join(repoRoot, handlers.ConfigDir, handlers.DirAgents)
 	agentPath := filepath.Join(agentsDir, cliAgentFile)
@@ -181,14 +191,14 @@ func uninstallKiroCLIHooks(repoRoot string, uninstallSession, uninstallAnalytics
 	modified := false
 
 	if uninstallSession {
-		if removeHook(config, "agentSpawn", "sx install") {
+		if removeHook(config, "agentSpawn", "axis install", "sx install") {
 			log.Info("CLI hook removed", "hook", "agentSpawn")
 			modified = true
 		}
 	}
 
 	if uninstallAnalytics {
-		if removeHook(config, "postToolUse", "sx report-usage") {
+		if removeHook(config, "postToolUse", "axis report-usage", "sx report-usage") {
 			log.Info("CLI hook removed", "hook", "postToolUse")
 			modified = true
 		}
@@ -204,7 +214,7 @@ func uninstallKiroCLIHooks(repoRoot string, uninstallSession, uninstallAnalytics
 	return nil
 }
 
-// uninstallKiroIDEHooks removes sx hooks from {repoRoot}/.kiro/hooks/
+// uninstallKiroIDEHooks removes axis hooks from {repoRoot}/.kiro/hooks/
 func uninstallKiroIDEHooks(repoRoot string, uninstallSession, uninstallAnalytics bool) error {
 	hooksDir := filepath.Join(repoRoot, handlers.ConfigDir, handlers.DirHooks)
 	log := logger.Get()
@@ -222,6 +232,12 @@ func uninstallKiroIDEHooks(repoRoot string, uninstallSession, uninstallAnalytics
 		hookPath := filepath.Join(hooksDir, ideHookReportUsage)
 		if err := os.Remove(hookPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove %s: %w", ideHookReportUsage, err)
+		}
+		// Also clean up the legacy pre-rename filename, in case it was never
+		// upgraded by a subsequent install.
+		legacyPath := filepath.Join(hooksDir, legacyIDEHookReportUsage)
+		if err := os.Remove(legacyPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove legacy %s: %w", legacyIDEHookReportUsage, err)
 		}
 		log.Info("IDE hook removed", "file", ideHookReportUsage)
 	}
@@ -272,33 +288,40 @@ func writeAgentConfig(path string, config *CLIAgentConfig) error {
 	return nil
 }
 
-// hasHookCommand checks if an agent config has a hook with the given command prefix
-// The prefix must be followed by whitespace or end of string (to avoid "sx install" matching "sx install-old")
-func hasHookCommand(config *CLIAgentConfig, eventType, commandPrefix string) bool {
+// hasHookCommand checks if an agent config has a hook with any of the given command prefixes
+// A prefix must be followed by whitespace or end of string (to avoid "axis install" matching "axis install-old")
+func hasHookCommand(config *CLIAgentConfig, eventType string, commandPrefixes ...string) bool {
 	hooks, ok := config.Hooks[eventType]
 	if !ok {
 		return false
 	}
 	for _, h := range hooks {
-		if matchesCommandPrefix(h.Command, commandPrefix) {
+		if matchesCommandPrefix(h.Command, commandPrefixes...) {
 			return true
 		}
 	}
 	return false
 }
 
-// matchesCommandPrefix checks if a command starts with the given prefix,
-// ensuring the prefix is followed by whitespace or end of string
-func matchesCommandPrefix(command, prefix string) bool {
-	if !strings.HasPrefix(command, prefix) {
-		return false
+// matchesCommandPrefix checks if a command starts with any of the given
+// prefixes, ensuring the matched prefix is followed by whitespace or end of
+// string. Multiple prefixes let a caller match both the current command name
+// and a legacy pre-rename one in a single check.
+func matchesCommandPrefix(command string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(command, prefix) {
+			continue
+		}
+		// Must be followed by space, tab, or end of string
+		if len(command) == len(prefix) {
+			return true
+		}
+		next := command[len(prefix)]
+		if next == ' ' || next == '\t' {
+			return true
+		}
 	}
-	// Must be followed by space, tab, or end of string
-	if len(command) == len(prefix) {
-		return true
-	}
-	next := command[len(prefix)]
-	return next == ' ' || next == '\t'
+	return false
 }
 
 // addHook adds a hook command to the agent config
@@ -306,10 +329,10 @@ func addHook(config *CLIAgentConfig, eventType string, hook CLIHookCommand) {
 	config.Hooks[eventType] = append(config.Hooks[eventType], hook)
 }
 
-// removeHook removes a hook with the given command prefix from the agent config
-// Returns true if a hook was removed
-// The prefix must be followed by whitespace or end of string (to avoid "sx install" matching "sx install-old")
-func removeHook(config *CLIAgentConfig, eventType, commandPrefix string) bool {
+// removeHook removes a hook matching any of the given command prefixes from
+// the agent config. Returns true if a hook was removed.
+// Each prefix must be followed by whitespace or end of string (to avoid "axis install" matching "axis install-old")
+func removeHook(config *CLIAgentConfig, eventType string, commandPrefixes ...string) bool {
 	hooks, ok := config.Hooks[eventType]
 	if !ok {
 		return false
@@ -318,7 +341,7 @@ func removeHook(config *CLIAgentConfig, eventType, commandPrefix string) bool {
 	newHooks := make([]CLIHookCommand, 0, len(hooks))
 	removed := false
 	for _, h := range hooks {
-		if matchesCommandPrefix(h.Command, commandPrefix) {
+		if matchesCommandPrefix(h.Command, commandPrefixes...) {
 			removed = true
 		} else {
 			newHooks = append(newHooks, h)

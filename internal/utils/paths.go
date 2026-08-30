@@ -83,11 +83,11 @@ func GetClaudeDir() (string, error) {
 	return filepath.Join(homeDir, ".claude"), nil
 }
 
-// GetConfigDir returns the path to the sx config directory
+// GetConfigDir returns the path to the axis config directory
 // Uses platform-specific config directories:
-// - Linux: ~/.config/sx (or $XDG_CONFIG_HOME/sx)
-// - macOS: ~/Library/Application Support/sx
-// - Windows: %AppData%/sx
+// - Linux: ~/.config/axis (or $XDG_CONFIG_HOME/axis)
+// - macOS: ~/Library/Application Support/axis
+// - Windows: %AppData%/axis
 func GetConfigDir() (string, error) {
 	// Check for environment override (support both new and legacy)
 	if configDir := os.Getenv("SX_CONFIG_DIR"); configDir != "" {
@@ -103,7 +103,7 @@ func GetConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to determine config directory: %w", err)
 	}
 
-	return filepath.Join(configDir, "sx"), nil
+	return filepath.Join(configDir, "axis"), nil
 }
 
 // GetConfigFile returns the path to the config.json file

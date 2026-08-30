@@ -14,7 +14,7 @@ import (
 // flight would race the same client directories.
 var syncMu sync.Mutex
 
-// SyncAITools runs the real `sx install` pipeline: every active profile's
+// SyncAITools runs the real `axis install` pipeline: every active profile's
 // lock file, scope resolution for this machine and user, delivery to every
 // detected AI tool, and stale-asset cleanup. It executes the CLI's install
 // command in-process so the app and the terminal can never disagree about
@@ -42,7 +42,7 @@ func (a *App) SyncAITools() (string, error) {
 	return "Your AI tools are up to date", nil
 }
 
-// installSummary pulls the human outcome line out of `sx install` output.
+// installSummary pulls the human outcome line out of `axis install` output.
 // Summary lines ("✓ Installed 3 assets") start at column 0; per-asset item
 // lines are indented — prefer the last top-level summary so a multi-asset
 // sync doesn't report the final asset's bare name.

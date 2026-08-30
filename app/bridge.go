@@ -21,7 +21,7 @@ import (
 	vaultpkg "github.com/sleuth-io/sx/v2/internal/vault"
 )
 
-// App is the Wails-bound bridge between the frontend and sx's vault layer.
+// App is the Wails-bound bridge between the frontend and axis's vault layer.
 // It stays a thin translation layer: every operation routes through the same
 // internal packages the CLI uses, so the app and CLI can never disagree
 // about vault state.
@@ -171,7 +171,7 @@ type VaultInfo struct {
 	// (a per-library setting; see SetLibraryRepoTracking).
 	TrackRepos bool `json:"trackRepos"`
 	// Icon is the library's uploaded icon as a data URL; empty means the
-	// default sx mark.
+	// default axis mark.
 	Icon string `json:"icon"`
 }
 
@@ -259,8 +259,8 @@ func (a *App) GetVaultInfo() VaultInfo {
 	return info
 }
 
-// SetupLocalVault creates (or adopts) a local path vault at ~/SX Library
-// and points the shared sx config at it. Zero-setup "Just me" onboarding.
+// SetupLocalVault creates (or adopts) a local path vault at ~/Axis Library
+// and points the shared axis config at it. Zero-setup "Just me" onboarding.
 // identity (an email) is required when the machine has no git identity —
 // vault changes are attributed to it.
 func (a *App) SetupLocalVault(identity string) (VaultInfo, error) {
@@ -268,7 +268,7 @@ func (a *App) SetupLocalVault(identity string) (VaultInfo, error) {
 	if err != nil {
 		return VaultInfo{}, err
 	}
-	dir := filepath.Join(home, "SX Library")
+	dir := filepath.Join(home, "Axis Library")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return VaultInfo{}, err
 	}
@@ -289,7 +289,7 @@ func (a *App) SetupLocalVault(identity string) (VaultInfo, error) {
 type SyncFolderOption struct {
 	Provider  string `json:"provider"`  // "Dropbox", "Google Drive", ...
 	Path      string `json:"path"`      // the sync root
-	Suggested string `json:"suggested"` // root + "/SX Library"
+	Suggested string `json:"suggested"` // root + "/Axis Library"
 }
 
 // ListSyncFolders returns the cloud-sync roots detected on this machine
@@ -301,13 +301,13 @@ func (a *App) ListSyncFolders() []SyncFolderOption {
 		out = append(out, SyncFolderOption{
 			Provider:  f.Provider,
 			Path:      f.Path,
-			Suggested: filepath.Join(f.Path, "SX Library"),
+			Suggested: filepath.Join(f.Path, "Axis Library"),
 		})
 	}
 	return out
 }
 
-// SetupSharedFolderVault points the shared sx config at a path vault inside
+// SetupSharedFolderVault points the shared axis config at a path vault inside
 // a folder the user's cloud-sync app already shares (Dropbox, Google Drive,
 // OneDrive, iCloud). Same machinery as SetupLocalVault, arbitrary location;
 // if the folder already holds a teammate's vault we simply join it.
@@ -331,7 +331,7 @@ func (a *App) SetupSharedFolderVault(path, identity string) (VaultInfo, error) {
 	return a.GetVaultInfo(), nil
 }
 
-// SetupGitVault points the shared sx config at a team git vault. The
+// SetupGitVault points the shared axis config at a team git vault. The
 // repository is validated BEFORE the config is saved so a typo'd URL leaves
 // the app in onboarding rather than persisting a broken configuration.
 func (a *App) SetupGitVault(url, identity string) (VaultInfo, error) {

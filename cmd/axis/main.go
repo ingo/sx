@@ -132,9 +132,9 @@ func main() {
 	}
 
 	rootCmd := &cobra.Command{
-		Use:   "sx",
+		Use:   "axis",
 		Short: "Your team's private npm for AI assets",
-		Long: `sx is your team's private npm for AI assets - skills, MCP configs, commands, and more.
+		Long: `axis is your team's private npm for AI assets - skills, MCP configs, commands, and more.
 Capture what your best AI users have learned and spread it to everyone automatically.`,
 		Version: fmt.Sprintf("%s (commit: %s, built: %s)", buildinfo.Version, buildinfo.Commit, buildinfo.Date),
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -166,7 +166,7 @@ Capture what your best AI users have learned and spread it to everyone automatic
 	header := func(strs ...string) string { return theme.Current().Styles().Header.Render(strs...) }
 
 	cobra.AddTemplateFunc("styledVersion", func() string {
-		return bold("sx") + " " + emphasis(buildinfo.Version) + " " +
+		return bold("axis") + " " + emphasis(buildinfo.Version) + " " +
 			muted("(commit: "+buildinfo.Commit+", built: "+buildinfo.Date+")")
 	})
 	rootCmd.SetVersionTemplate("{{styledVersion}}\n")

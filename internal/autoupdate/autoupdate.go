@@ -19,8 +19,14 @@ import (
 	"github.com/sleuth-io/sx/v2/internal/logger"
 )
 
+// GithubOwner/GithubRepo point at our own fork, deliberately never upstream
+// (sleuth-io/sx): auto-updating from upstream's releases would silently
+// overwrite this fork's rename/customizations with the unmodified original
+// the moment sleuth-io cuts a new release. This is a safe no-op until a real
+// "axis"-named release pipeline exists on the fork — DetectLatest simply
+// finds nothing to update to.
 const (
-	GithubOwner       = "sleuth-io"
+	GithubOwner       = "ingo"
 	GithubRepo        = "sx"
 	checkInterval     = 24 * time.Hour
 	updateCacheFile   = "last-update-check"
@@ -29,14 +35,14 @@ const (
 )
 
 // CLIAssetFilter returns a regexp matching only the GoReleaser CLI archive
-// for the current platform, e.g. "sx_Linux_x86_64.tar.gz". It mirrors the
+// for the current platform, e.g. "axis_Linux_x86_64.tar.gz". It mirrors the
 // name_template in .goreleaser.yml.
 //
-// The GitHub release also carries desktop-app archives (sx-app-<os>-<arch>…)
+// The GitHub release also carries desktop-app archives (axis-app-<os>-<arch>…)
 // whose names would otherwise satisfy go-selfupdate's default <os><sep><arch>
 // suffix match and get selected instead of the CLI binary — the app tar has
-// no "sx" executable inside, so the update then fails with "executable not
-// found in tar". Constraining asset selection to "sx_<OS>_<ARCH>" avoids that.
+// no "axis" executable inside, so the update then fails with "executable not
+// found in tar". Constraining asset selection to "axis_<OS>_<ARCH>" avoids that.
 // go-selfupdate lowercases asset names before matching, so this pattern is
 // lowercase and anchored.
 func CLIAssetFilter() string {
@@ -47,12 +53,12 @@ func CLIAssetFilter() string {
 	case "386":
 		arch = "i386"
 	}
-	return fmt.Sprintf(`^sx_%s_%s\.(tar\.gz|zip)$`, runtime.GOOS, arch)
+	return fmt.Sprintf(`^axis_%s_%s\.(tar\.gz|zip)$`, runtime.GOOS, arch)
 }
 
 // NewUpdater builds a go-selfupdate Updater restricted to the CLI's own
 // release archives via CLIAssetFilter. Shared by the background auto-updater
-// and the `sx update` command so both select the same asset.
+// and the `axis update` command so both select the same asset.
 func NewUpdater() (*selfupdate.Updater, error) {
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 	if err != nil {
@@ -148,7 +154,7 @@ func ApplyPendingUpdate() bool {
 		return false
 	}
 	if !currentV.LessThan(pendingV) {
-		// Already at or ahead — user may have run `sx update` or Homebrew upgrade
+		// Already at or ahead — user may have run `axis update` or Homebrew upgrade
 		_ = os.Remove(markerPath)
 		return false
 	}
@@ -183,7 +189,7 @@ func ApplyPendingUpdate() bool {
 }
 
 // ClearPendingUpdate removes the pending update marker file.
-// Call this after a successful manual update (e.g., `sx update`).
+// Call this after a successful manual update (e.g., `axis update`).
 func ClearPendingUpdate() {
 	markerPath, err := pendingUpdatePath()
 	if err != nil {

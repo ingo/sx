@@ -86,16 +86,17 @@ func installCopilotHooks(repoRoot string, opts []bootstrap.Option) error {
 
 	// Install sessionStart hook (if enabled)
 	if bootstrap.ContainsKey(opts, bootstrap.SessionHookKey) {
-		// Bare "sx" on purpose. Unlike the user-scoped configs, this file is
+		// Bare "axis" on purpose. Unlike the user-scoped configs, this file is
 		// .github/hooks/sx.json inside the user's repository — workspace-scoped,
-		// not gitignored by sx, and typically committed. A machine-absolute path
+		// not gitignored by axis, and typically committed. A machine-absolute path
 		// here breaks every other developer and CI, the same reasoning
 		// docs/clients.md gives for keeping packaged servers out of
-		// .github/mcp.json. clipath.Managed matches both forms, so detection,
-		// upgrade, and removal are unaffected.
-		installHook := "sx install --hook-mode --client=github-copilot"
+		// .github/mcp.json. clipath.Managed matches both forms (and the
+		// legacy bare-"sx" one), so detection, upgrade, and removal are
+		// unaffected.
+		installHook := "axis install --hook-mode --client=github-copilot"
 		if !hasHookWithCommand(config.Hooks["sessionStart"], installHook) {
-			// Replace any prior sx-written install hook, including the legacy
+			// Replace any prior axis-written install hook, including the legacy
 			// bare-"sx" and pre-rename "skills" forms.
 			config.Hooks["sessionStart"] = removeHooksWithPrefix(config.Hooks["sessionStart"], "install")
 			config.Hooks["sessionStart"] = append(config.Hooks["sessionStart"], CopilotHookEntry{
@@ -110,11 +111,11 @@ func installCopilotHooks(repoRoot string, opts []bootstrap.Option) error {
 
 	// Install postToolUse hook (if enabled)
 	if bootstrap.ContainsKey(opts, bootstrap.AnalyticsHookKey) {
-		// Bare "sx" for the same reason as the install hook above: this file is
+		// Bare "axis" for the same reason as the install hook above: this file is
 		// committed to the user's repository.
-		reportHook := "sx report-usage --client=github-copilot"
+		reportHook := "axis report-usage --client=github-copilot"
 		if !hasHookWithCommand(config.Hooks["postToolUse"], reportHook) {
-			// Remove old hooks: "sx report-usage" (old format) and "skills report-usage" (pre-rename, tool was called "skills")
+			// Remove old hooks: "sx report-usage" (pre-rename, tool was called "sx") and "skills report-usage" (before that, "skills")
 			config.Hooks["postToolUse"] = removeHooksWithPrefix(config.Hooks["postToolUse"], "report-usage")
 			config.Hooks["postToolUse"] = append(config.Hooks["postToolUse"], CopilotHookEntry{
 				Type:       "command",
@@ -261,7 +262,7 @@ func uninstallBootstrap(opts []bootstrap.Option) error {
 	return nil
 }
 
-// uninstallCopilotHooks removes sx hooks from sx.json
+// uninstallCopilotHooks removes axis hooks from sx.json
 func uninstallCopilotHooks(hookFilePath string, uninstallSession, uninstallAnalytics bool) error {
 	log := logger.Get()
 
@@ -328,7 +329,7 @@ func hasHookWithCommand(hooks []CopilotHookEntry, command string) bool {
 }
 
 // removeHooksWithPrefix removes hooks whose bash command starts with any of the given prefixes
-// removeHooksWithPrefix drops hooks that invoke sx with any of the given
+// removeHooksWithPrefix drops hooks that invoke axis with any of the given
 // subcommands, matching both the legacy bare-"sx" form and absolute paths.
 func removeHooksWithPrefix(hooks []CopilotHookEntry, subcommands ...string) []CopilotHookEntry {
 	var filtered []CopilotHookEntry

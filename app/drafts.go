@@ -23,7 +23,7 @@ import (
 )
 
 // Drafts are the app's local, unpublished working copies. A draft lives in
-// the sx config directory (app-drafts/{id}/ with a draft.json plus the
+// the axis config directory (app-drafts/{id}/ with a draft.json plus the
 // asset's files), survives restarts, and touches the vault only when the
 // user hits Publish. The word "version" never reaches the UI: publishes are
 // "revisions" and their numbering is automatic.
@@ -799,7 +799,7 @@ func assetTypeOf(a *App, name, version string) asset.Type {
 
 // zipFromFiles builds an in-memory zip from draft files.
 func zipFromFiles(files []AssetFile) ([]byte, error) {
-	tmp, err := os.MkdirTemp("", "sx-app-draft-*")
+	tmp, err := os.MkdirTemp("", "axis-app-draft-*")
 	if err != nil {
 		return nil, err
 	}

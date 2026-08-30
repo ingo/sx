@@ -22,7 +22,7 @@ import (
 // library state; API keys live in the OS keyring, never on disk and
 // never in the webview.
 
-// llmConfigFile holds the provider selection under the sx config dir.
+// llmConfigFile holds the provider selection under the axis config dir.
 const llmConfigFile = "llm.json"
 
 // llmKeyringAccount namespaces provider API keys in the same keyring
@@ -62,7 +62,7 @@ func loadLLMConfig() (llm.Config, error) {
 	if err != nil {
 		return llm.Config{}, err
 	}
-	data, err := os.ReadFile(path) // #nosec G304 -- fixed name under the sx config dir
+	data, err := os.ReadFile(path) // #nosec G304 -- fixed name under the axis config dir
 	if os.IsNotExist(err) {
 		return llm.Config{}, nil
 	}

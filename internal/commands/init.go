@@ -54,6 +54,12 @@ func computeDisabledClients(selectedClients []string) []string {
 
 const (
 	defaultSleuthServerURL = "https://app.skills.new"
+
+	// defaultVaultRepoURL is the org's shared git vault. Used only when a
+	// fresh install specifies nothing else (see runInit) — most users should
+	// never need to pick a vault type at all. Explicit flags, or an existing
+	// config, always take precedence.
+	defaultVaultRepoURL = "https://git-ext.ecd.axway.com/arch/ai/axis-asset-sync.git"
 )
 
 // NewInitCommand creates the init command
@@ -69,7 +75,7 @@ func NewInitCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize configuration (local path, Git repo, or Skills.new)",
-		Long: `Initialize sx configuration using a local directory, Git repository,
+		Long: `Initialize axis configuration using a local directory, Git repository,
 or Skills.new as the asset source.
 
 By default, runs in interactive mode with local path as the default option.
@@ -110,6 +116,11 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL, pa
 		}
 		// Load existing config to pre-populate options
 		existingCfg, _ = config.Load()
+	} else if repoType == "" && repoURL == "" && pathFlag == "" && serverURL == "" {
+		// Fresh install, nothing specified — default straight to the org's
+		// shared git vault instead of prompting "how will you use axis?".
+		repoType = "git"
+		repoURL = defaultVaultRepoURL
 	}
 
 	// Parse clients flag (works for both interactive and non-interactive modes)
@@ -172,7 +183,7 @@ func runPostInit(cmd *cobra.Command, ctx context.Context, enabledClients []strin
 
 	// Final hint
 	styledOut.Newline()
-	styledOut.Muted("Run 'sx vault list' to see your assets or 'sx add --browse' to browse skills.sh.")
+	styledOut.Muted("Run 'axis vault list' to see your assets or 'axis add --browse' to browse skills.sh.")
 }
 
 // showInitSummary displays a summary of what was configured
@@ -188,7 +199,7 @@ func showInitSummary(cmd *cobra.Command) {
 func runInitInteractive(cmd *cobra.Command, ctx context.Context, existingCfg *config.Config, flagClients []string) ([]string, error) {
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
-	styledOut.Header("Initialize sx")
+	styledOut.Header("Initialize axis")
 
 	options := []components.Option{
 		{Label: "Just for myself", Value: "personal", Description: "Local vault"},
@@ -201,7 +212,7 @@ func runInitInteractive(cmd *cobra.Command, ctx context.Context, existingCfg *co
 		defaultIndex = 1 // "Share with my team"
 	}
 
-	selected, err := components.SelectWithDefault("How will you use sx?", options, defaultIndex)
+	selected, err := components.SelectWithDefault("How will you use axis?", options, defaultIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +368,7 @@ func promptForSharedFolderPath(detected []utils.SyncFolder, defaultPath string, 
 			return "", err
 		}
 		if selected.Value != "" {
-			path, err := components.InputWithIO("Folder for the shared vault", "", filepath.Join(selected.Value, "sx-vault"), in, out)
+			path, err := components.InputWithIO("Folder for the shared vault", "", filepath.Join(selected.Value, "axis-vault"), in, out)
 			if err != nil {
 				return "", err
 			}
@@ -368,7 +379,7 @@ func promptForSharedFolderPath(detected []utils.SyncFolder, defaultPath string, 
 		}
 	}
 
-	path, err := components.InputWithIO("Enter the shared folder path", "~/Dropbox/sx-vault", defaultPath, in, out)
+	path, err := components.InputWithIO("Enter the shared folder path", "~/Dropbox/axis-vault", defaultPath, in, out)
 	if err != nil {
 		return "", err
 	}
@@ -391,11 +402,11 @@ func printSharedFolderNextSteps(styledOut *ui.Output, provider, absPath string, 
 	}
 	styledOut.Info("Next steps to share with your team:")
 	styledOut.Printf("  1. In %s, share the folder %s with your teammates.\n", provider, absPath)
-	styledOut.Printf("  2. Each teammate runs:  sx init --type path --path %q\n", absPath)
-	styledOut.Printf("  3. Let the folder finish syncing before running sx install.\n")
+	styledOut.Printf("  2. Each teammate runs:  axis init --type path --path %q\n", absPath)
+	styledOut.Printf("  3. Let the folder finish syncing before running axis install.\n")
 	styledOut.Newline()
 	styledOut.Muted("Changes are attributed to your git email (git config user.email).")
-	styledOut.Muted("If two people publish at once your sync app may create a conflicted copy — see docs/synced-folders.md if sx reports one.")
+	styledOut.Muted("If two people publish at once your sync app may create a conflicted copy — see docs/synced-folders.md if axis reports one.")
 }
 
 // runInitNonInteractive runs the init command in non-interactive mode

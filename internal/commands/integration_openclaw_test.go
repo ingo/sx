@@ -125,13 +125,13 @@ func TestOpenClawBootstrapInstall(t *testing.T) {
 		t.Error("HOOK.md should contain before_agent_start event")
 	}
 
-	// Verify index.ts contains sx install command
+	// Verify index.ts contains axis install command
 	indexContent, err := os.ReadFile(filepath.Join(hookDir, "index.ts"))
 	if err != nil {
 		t.Fatalf("Failed to read index.ts: %v", err)
 	}
-	if !strings.Contains(string(indexContent), "sx install --hook-mode --client=openclaw") {
-		t.Error("index.ts should contain sx install command")
+	if !strings.Contains(string(indexContent), "axis install --hook-mode --client=openclaw") {
+		t.Error("index.ts should contain axis install command")
 	}
 }
 

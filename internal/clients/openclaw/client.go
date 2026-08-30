@@ -294,9 +294,9 @@ func (c *Client) installSessionHook(openclawDir string) error {
 events: [before_agent_start]
 ---
 
-# sx Install Hook
+# axis Install Hook
 
-Automatically runs sx install when an agent session begins to ensure
+Automatically runs axis install when an agent session begins to ensure
 skills are up to date.
 `
 	hookMDPath := filepath.Join(hookDir, "HOOK.md")
@@ -318,7 +318,7 @@ export default async function handler() {
     });
   } catch (error) {
     // Don't block agent startup on install failures
-    console.error("[sx] install hook failed:", error);
+    console.error("[axis] install hook failed:", error);
   }
 }
 `, installCmd)

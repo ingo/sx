@@ -17,7 +17,7 @@ import (
 	vaultpkg "github.com/sleuth-io/sx/v2/internal/vault"
 )
 
-// The extensions marketplace is nothing more than another sx vault that
+// The extensions marketplace is nothing more than another axis vault that
 // happens to be full of app-plugin assets. Browsing opens it read-only;
 // installing republishes the chosen asset into the CURRENT vault through
 // the same validated path as "Add extension…", so a marketplace install
@@ -361,7 +361,7 @@ func (a *App) InstallMarketplaceExtension(assetName, scope string) (string, erro
 	if manifestBytes, err := utils.ReadZipFile(zipData, "plugin.json"); err == nil {
 		_ = json.Unmarshal(manifestBytes, &pm)
 	}
-	dir, err := os.MkdirTemp("", "sx-marketplace-*")
+	dir, err := os.MkdirTemp("", "axis-marketplace-*")
 	if err != nil {
 		return "", err
 	}

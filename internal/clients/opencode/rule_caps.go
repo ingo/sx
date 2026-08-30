@@ -14,7 +14,7 @@ import (
 // reads project rules from `AGENTS.md` and any additional files listed in
 // the `instructions` array of opencode.json. (OpenCode also reads
 // `CLAUDE.md` for backwards-compat, but that file is claimed by the
-// Claude Code rule caps to avoid duplicate detection.) sx installs rules
+// Claude Code rule caps to avoid duplicate detection.) axis installs rules
 // into a `<config>/rules/` directory and registers each rule path under
 // `instructions`.
 func RuleCapabilities() *clients.RuleCapabilities {

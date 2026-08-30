@@ -14,7 +14,7 @@ import (
 
 // Teams group people so assets can be shared with exactly the right set of
 // teammates. The bridge reuses the same vault team management the CLI's
-// `sx team` commands use.
+// `axis team` commands use.
 
 // TeamInfo is the frontend view of a team.
 type TeamInfo struct {

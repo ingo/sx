@@ -23,7 +23,7 @@ import (
 	vaultpkg "github.com/sleuth-io/sx/v2/internal/vault"
 )
 
-// Settings exposes the shared sx configuration (the same one the CLI uses)
+// Settings exposes the shared axis configuration (the same one the CLI uses)
 // so the app is never a mystery: which vault, which profile, which file.
 
 // ProfileInfo describes one configured profile for the settings view.
@@ -35,7 +35,7 @@ type ProfileInfo struct {
 	// Default: the library the app is viewing and writes go to.
 	Default bool `json:"default"`
 	// Active: part of the active set — Sync installs this library's assets
-	// too. More than one library can be active at a time (sx multi-profile).
+	// too. More than one library can be active at a time (axis multi-profile).
 	Active bool `json:"active"`
 	// TrackRepos: repository and bot views are enabled for this library.
 	TrackRepos bool `json:"trackRepos"`
@@ -43,7 +43,7 @@ type ProfileInfo struct {
 	Icon string `json:"icon"`
 }
 
-// Settings is the app's view of the sx configuration.
+// Settings is the app's view of the axis configuration.
 type Settings struct {
 	Profiles []ProfileInfo `json:"profiles"`
 }
@@ -487,7 +487,7 @@ type LibraryRemoval struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Location string `json:"location"`
-	// LastLibrary blocks removal entirely (same rule as `sx profile remove`).
+	// LastLibrary blocks removal entirely (same rule as `axis profile remove`).
 	LastLibrary bool `json:"lastLibrary"`
 	// Active: removing this library switches the app to another one.
 	Active bool `json:"active"`
@@ -560,8 +560,8 @@ func (a *App) DescribeLibraryRemoval(name string) (LibraryRemoval, error) {
 	return out, nil
 }
 
-// RemoveLibrary disconnects a library from the shared sx configuration —
-// the same operation as `sx profile remove`, including its refusal to
+// RemoveLibrary disconnects a library from the shared axis configuration —
+// the same operation as `axis profile remove`, including its refusal to
 // remove the last one. With deleteSource, the underlying storage goes too:
 // the vault folder for path libraries, the GitHub repository for git ones.
 // Source deletion happens first — if it fails, the library stays configured
@@ -621,9 +621,9 @@ func (a *App) RemoveLibrary(name string, deleteSource bool) (VaultInfo, error) {
 }
 
 // SetLibraryActive adds or removes a library from the active set — the
-// libraries Sync (and `sx install`) merge assets from. The current library
+// libraries Sync (and `axis install`) merge assets from. The current library
 // is always active; the last active library can't be deactivated. Mirrors
-// `sx profile activate` / `sx profile deactivate`.
+// `axis profile activate` / `axis profile deactivate`.
 func (a *App) SetLibraryActive(name string, active bool) error {
 	mpc, err := config.LoadMultiProfile()
 	if err != nil {

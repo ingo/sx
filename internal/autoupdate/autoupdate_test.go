@@ -14,8 +14,8 @@ import (
 )
 
 // TestCLIAssetFilter guards the fix for the 2.0.0 auto-update break: the
-// GitHub release carries both the CLI archive (sx_<OS>_<ARCH>.tar.gz) and
-// desktop-app archives (sx-app-<os>-<arch>-portable.tar.gz). The filter must
+// GitHub release carries both the CLI archive (axis_<OS>_<ARCH>.tar.gz) and
+// desktop-app archives (axis-app-<os>-<arch>-portable.tar.gz). The filter must
 // select the former and reject the latter. go-selfupdate lowercases asset
 // names before matching, so the filter is applied to lowercased names here.
 func TestCLIAssetFilter(t *testing.T) {
@@ -38,7 +38,7 @@ func TestCLIAssetFilter(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		ext = "zip"
 	}
-	cliName := "sx_" + osTitle + "_" + arch + "." + ext
+	cliName := "axis_" + osTitle + "_" + arch + "." + ext
 
 	if !re.MatchString(strings.ToLower(cliName)) {
 		t.Errorf("filter %q did not match CLI archive %q", re.String(), cliName)
@@ -48,9 +48,9 @@ func TestCLIAssetFilter(t *testing.T) {
 	// the names that broke deployed clients when they matched the default
 	// <os><sep><arch> suffix.
 	appNames := []string{
-		"sx-app-" + runtime.GOOS + "-" + runtime.GOARCH + "-portable." + ext,
-		"sx-app-" + runtime.GOOS + "-" + runtime.GOARCH + "." + ext, // the pre-fix name
-		"sx-app-macos-" + runtime.GOARCH + "-unsigned.zip",
+		"axis-app-" + runtime.GOOS + "-" + runtime.GOARCH + "-portable." + ext,
+		"axis-app-" + runtime.GOOS + "-" + runtime.GOARCH + "." + ext, // the pre-fix name
+		"axis-app-macos-" + runtime.GOARCH + "-unsigned.zip",
 		"checksums.txt",
 	}
 	for _, name := range appNames {
@@ -360,8 +360,8 @@ func TestMarkerFileFormat(t *testing.T) {
 
 	pending := pendingUpdate{
 		Version:   "1.2.3",
-		AssetURL:  "https://github.com/sleuth-io/sx/releases/download/v1.2.3/sx_Linux_x86_64.tar.gz",
-		AssetName: "sx_Linux_x86_64.tar.gz",
+		AssetURL:  "https://github.com/ingo/sx/releases/download/v1.2.3/axis_Linux_x86_64.tar.gz",
+		AssetName: "axis_Linux_x86_64.tar.gz",
 	}
 
 	data, err := json.Marshal(pending)

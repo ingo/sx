@@ -80,7 +80,7 @@ func (a *App) buildCollectionBundle(name, format string) ([]byte, error) {
 		description = fmt.Sprintf("Skills in the %s collection", name)
 	}
 
-	tmp, err := os.MkdirTemp("", "sx-export-*")
+	tmp, err := os.MkdirTemp("", "axis-export-*")
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (a *App) buildCollectionBundle(name, format string) ([]byte, error) {
 			}
 			skills++
 			// The install-path conversion: SKILL.md → commands/<name>.toml
-			// with sx→Gemini syntax rewrites.
+			// with axis→Gemini syntax rewrites.
 			if err := geminihandlers.NewSkillHandler(meta).Install(ctx, zipData, root); err != nil {
 				return nil, fmt.Errorf("converting %s: %w", assetName, err)
 			}

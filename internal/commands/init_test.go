@@ -135,7 +135,7 @@ func TestPromptForSharedFolderPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if want := filepath.Join("/home/u/Dropbox", "sx-vault"); got != want {
+		if want := filepath.Join("/home/u/Dropbox", "axis-vault"); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 		if !strings.Contains(out.String(), "Dropbox") || !strings.Contains(out.String(), "Google Drive") {

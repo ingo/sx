@@ -34,7 +34,7 @@ type UpdateInfo struct {
 	Installed bool `json:"installed"`
 }
 
-const releasesURL = "https://api.github.com/repos/sleuth-io/sx/releases/latest"
+const releasesURL = "https://api.github.com/repos/ingo/sx/releases/latest"
 
 type githubRelease struct {
 	TagName string `json:"tag_name"`
@@ -93,7 +93,7 @@ func (a *App) checkForUpdate() updateOutcome {
 }
 
 // CheckForUpdate compares this build against the latest GitHub release and,
-// like `sx` itself, applies the update automatically when it can (macOS,
+// like `axis` itself, applies the update automatically when it can (macOS,
 // running from an installed .app bundle). When automatic install isn't
 // possible it falls back to a notify-only banner.
 func (a *App) CheckForUpdate() UpdateInfo {
@@ -117,7 +117,7 @@ func (a *App) CheckForUpdatesInteractively() {
 		switch out.status {
 		case "installed":
 			a.updateDialog("Update installed",
-				fmt.Sprintf("sx was updated to version %s. It takes effect the next time you open the app.", out.version))
+				fmt.Sprintf("axis was updated to version %s. It takes effect the next time you open the app.", out.version))
 		case "available":
 			choice, err := wailsruntime.MessageDialog(a.ctx, wailsruntime.MessageDialogOptions{
 				Type:          wailsruntime.QuestionDialog,
@@ -140,7 +140,7 @@ func (a *App) CheckForUpdatesInteractively() {
 				"The update service couldn't be reached. Check your connection and try again.")
 		default:
 			a.updateDialog("You're up to date",
-				fmt.Sprintf("sx %s is the latest version.", out.version))
+				fmt.Sprintf("axis %s is the latest version.", out.version))
 		}
 	}()
 }
@@ -155,7 +155,7 @@ func (a *App) updateDialog(title, message string) {
 
 // ShowAbout is the native menu's About item.
 func (a *App) ShowAbout() {
-	a.updateDialog("sx", "Your team's library for AI assets\n\nVersion "+buildinfo.Version)
+	a.updateDialog("axis", "Your team's library for AI assets\n\nVersion "+buildinfo.Version)
 }
 
 func (a *App) fetchLatestRelease() (githubRelease, bool) {
@@ -210,7 +210,7 @@ func (a *App) tryAutoUpdate(release githubRelease) bool {
 	if !ok {
 		return false
 	}
-	wantPrefix := "sx-app-macos-" + goruntime.GOARCH
+	wantPrefix := "axis-app-macos-" + goruntime.GOARCH
 	var assetURL string
 	for _, asset := range release.Assets {
 		if strings.HasPrefix(asset.Name, wantPrefix) && strings.HasSuffix(asset.Name, ".zip") {
@@ -223,10 +223,10 @@ func (a *App) tryAutoUpdate(release githubRelease) bool {
 	}
 
 	log := logger.Get()
-	staging, err := os.MkdirTemp(filepath.Dir(bundle), ".sx-app-update-")
+	staging, err := os.MkdirTemp(filepath.Dir(bundle), ".axis-app-update-")
 	if err != nil {
 		// Fall back to the system temp dir (may be a different volume).
-		staging, err = os.MkdirTemp("", "sx-app-update-")
+		staging, err = os.MkdirTemp("", "axis-app-update-")
 		if err != nil {
 			return false
 		}
@@ -275,7 +275,7 @@ func currentAppBundle() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	// …/sx.app/Contents/MacOS/sx
+	// …/axis.app/Contents/MacOS/axis
 	macosDir := filepath.Dir(exe)
 	contents := filepath.Dir(macosDir)
 	bundle := filepath.Dir(contents)

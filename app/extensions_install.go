@@ -17,7 +17,7 @@ import (
 
 // Extension installs are scoped: "me" adds a personal user scope so the
 // extension reaches only the installing user; "org" leaves it library-wide.
-// The scope lives in the vault manifest — the same rows `sx add --user me`
+// The scope lives in the vault manifest — the same rows `axis add --user me`
 // writes — so the Extensions screen, the CLI, and every teammate's app agree
 // on who receives what.
 const (
@@ -315,7 +315,7 @@ func extensionScopeLabel(targets []vaultpkg.InstallTarget, mine bool) string {
 }
 
 // emitExtensionInstall appends the install/update audit event and the
-// usage event that feeds `sx stats`. Both are fire-and-forget: on a git
+// usage event that feeds `axis stats`. Both are fire-and-forget: on a git
 // vault each append is a pull+commit+push and must not block the UI —
 // the published asset is the durable state.
 func (a *App) emitExtensionInstall(id, version, scope, source string, wasUpdate bool) {

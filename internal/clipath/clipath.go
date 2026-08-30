@@ -1,8 +1,8 @@
-// Package clipath answers one question in one place: where is the sx CLI?
+// Package clipath answers one question in one place: where is the axis CLI?
 //
 // Client hooks and MCP server entries are configuration that some other
-// program executes later, in an environment sx does not control. Writing a
-// bare "sx" into them assumes the CLI is on that program's PATH — true when sx
+// program executes later, in an environment axis does not control. Writing a
+// bare "axis" into them assumes the CLI is on that program's PATH — true when axis
 // was installed with Homebrew or install.sh, false when the user only
 // installed the desktop app, and unreliable for GUI clients launched from
 // Finder or a Dock (which inherit launchd's minimal PATH, not a shell's).
@@ -27,10 +27,10 @@ import (
 	"sync"
 )
 
-// ErrNotFound means no sx CLI could be located. Callers should degrade rather
-// than fail: a hook carrying a bare "sx" still works for anyone whose PATH has
+// ErrNotFound means no axis CLI could be located. Callers should degrade rather
+// than fail: a hook carrying a bare "axis" still works for anyone whose PATH has
 // it, which is strictly better than refusing to install the hook.
-var ErrNotFound = errors.New("clipath: no sx CLI binary found")
+var ErrNotFound = errors.New("clipath: no axis CLI binary found")
 
 // EnvOverride names the escape hatch. Set it when the CLI lives somewhere the
 // search below cannot reasonably guess.
@@ -42,20 +42,26 @@ const EnvOverride = "SX_CLI_PATH"
 var goos = runtime.GOOS
 
 // binaryName is the CLI's file name, which is deliberately not the app's
-// (wails builds "sx-app"), so a sibling lookup cannot pick the GUI by mistake.
+// (wails builds "axis-app"), so a sibling lookup cannot pick the GUI by mistake.
 func binaryName() string {
 	if goos == "windows" {
-		return "sx.exe"
+		return "axis.exe"
 	}
-	return "sx"
+	return "axis"
 }
 
 // legacyBinaryNames are argv[0] values that earlier versions wrote into hook
 // configs. Recognized so existing hooks are upgraded in place instead of
-// duplicated.
-var legacyBinaryNames = []string{"sx", "sx.exe", "skills", "skills.exe"}
+// duplicated. "sx"/"sx.exe" predate the rename to axis; "skills"/"skills.exe"
+// predate that rename to sx.
+var legacyBinaryNames = []string{"axis", "axis.exe", "sx", "sx.exe", "skills", "skills.exe"}
 
-// Resolve returns an absolute path to an sx CLI binary that can run
+// legacyAppNames mirrors legacyBinaryNames for the GUI binary: "sx-app" is
+// what pre-rename installs wrote, and must still be recognized as the
+// (never-usable-as-a-CLI) GUI binary so those installs get repaired too.
+var legacyAppNames = []string{"axis-app", "axis-app.exe", "sx-app", "sx-app.exe"}
+
+// Resolve returns an absolute path to an axis CLI binary that can run
 // subcommands.
 //
 // Precedence, and what it does and does not guarantee: the binary already
@@ -66,7 +72,7 @@ var legacyBinaryNames = []string{"sx", "sx.exe", "skills", "skills.exe"}
 // the app manages with code predating the current layout. App-initiated skew
 // stays forward-only.
 //
-// It is not a global guarantee. Running your own `sx install` from a terminal
+// It is not a global guarantee. Running your own `axis install` from a terminal
 // bakes *that* CLI's path in — more precisely, the most stable known spelling
 // of the binary you invoked (a versioned Homebrew Cellar target is recorded
 // as the stable bin/ symlink that points at it, never the Cellar path an
@@ -75,7 +81,7 @@ var legacyBinaryNames = []string{"sx", "sx.exe", "skills", "skills.exe"}
 // they pin differs. SX_CLI_PATH overrides all of it.
 //
 // This only decides what goes into hook and MCP configuration. What happens
-// when the user types "sx" in a terminal is their shell's PATH, untouched.
+// when the user types "axis" in a terminal is their shell's PATH, untouched.
 //
 // The result is memoized for the process lifetime: Managed and friends call
 // this once per config entry they inspect, and the probe work (PATH lookups,
@@ -169,7 +175,7 @@ func candidates() []string {
 		// invoked — deliberately without consulting PATH, which differs
 		// between a terminal and a GUI-launched client and would make the
 		// recorded spelling alternate between installs of the same binary.
-		// Comparisons use normalizedBase: the CLI may be invoked as "SX" on
+		// Comparisons use normalizedBase: the CLI may be invoked as "AXIS" on
 		// a case-insensitive filesystem.
 		if normalizedBase(exe) == binaryName() {
 			if alias := versionedTreeAlias(exe); alias != "" {
@@ -177,7 +183,7 @@ func candidates() []string {
 			}
 			out = append(out, exe)
 		} else if normalizedBase(resolved) == binaryName() {
-			// Invoked through a differently-named symlink ("skills" -> sx):
+			// Invoked through a differently-named symlink ("skills" -> axis):
 			// only the resolved path is recognizably the CLI.
 			if alias := versionedTreeAlias(resolved); alias != "" {
 				out = append(out, alias)
@@ -187,7 +193,7 @@ func candidates() []string {
 
 		dir := filepath.Dir(resolved)
 
-		// macOS: .../sx.app/Contents/MacOS/sx-app -> .../Contents/Resources/sx
+		// macOS: .../axis.app/Contents/MacOS/axis-app -> .../Contents/Resources/axis
 		if filepath.Base(dir) == "MacOS" {
 			out = append(out, filepath.Join(filepath.Dir(dir), "Resources", binaryName()))
 		}
@@ -200,8 +206,8 @@ func candidates() []string {
 
 // versionedTreeAlias returns the stable spelling implied by a versioned
 // package-manager tree, when that alias exists on disk. A Homebrew-style
-// Cellar target names its own prefix — /opt/homebrew/Cellar/sx/2.3.1/bin/sx
-// implies /opt/homebrew/bin/sx — so the alias derives from the path alone,
+// Cellar target names its own prefix — /opt/homebrew/Cellar/axis/2.3.1/bin/axis
+// implies /opt/homebrew/bin/axis — so the alias derives from the path alone,
 // with no PATH or installDirs consultation. That restraint is the point:
 // PATH differs between a terminal and a GUI-launched client, and any
 // PATH-dependent preference would make the recorded spelling alternate
@@ -252,8 +258,8 @@ func formulaTree(canon string) string {
 }
 
 // brewCellarAlias derives the stable bin path a Homebrew-style Cellar
-// target implies: /opt/homebrew/Cellar/sx/2.3.1/bin/sx names
-// /opt/homebrew/bin/sx. Works for any prefix — /usr/local,
+// target implies: /opt/homebrew/Cellar/axis/2.3.1/bin/axis names
+// /opt/homebrew/bin/axis. Works for any prefix — /usr/local,
 // /home/linuxbrew/.linuxbrew, a custom --prefix — with one rule and no
 // PATH dependency. Returns "" for non-Cellar paths.
 func brewCellarAlias(canon string) string {
@@ -274,13 +280,13 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-// installDirs are where sx's own installers put the CLI. A GUI-launched client
+// installDirs are where axis's own installers put the CLI. A GUI-launched client
 // often cannot see these on PATH, which is the whole reason hooks need an
 // absolute path. A var so tests can isolate from the host machine.
 var installDirs = func() []string {
 	if goos == "windows" {
 		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			return []string{filepath.Join(local, "sx", "bin"), filepath.Join(local, "Programs", "sx")}
+			return []string{filepath.Join(local, "axis", "bin"), filepath.Join(local, "Programs", "axis")}
 		}
 		return nil
 	}
@@ -313,9 +319,9 @@ func isExecutableFile(path string) bool {
 // followed by args, shell-quoted when the path contains spaces (an app bundle
 // the user renamed, a home directory with a space in it).
 //
-// When no CLI can be found it returns the bare-"sx" form and ErrNotFound, so a
+// When no CLI can be found it returns the bare-"axis" form and ErrNotFound, so a
 // caller can log the degradation and still write a hook that works for anyone
-// with sx on PATH.
+// with axis on PATH.
 func Command(args ...string) (string, error) {
 	parts := append([]string{binaryName()}, args...)
 	fallback := strings.Join(parts, " ")
@@ -366,15 +372,15 @@ func AppManaged() bool {
 	}
 
 	// Windows and Linux: the CLI sits beside the app binary.
-	appName := "sx-app"
+	appName := "axis-app"
 	if goos == "windows" {
-		appName = "sx-app.exe"
+		appName = "axis-app.exe"
 	}
 	return isExecutableFile(filepath.Join(filepath.Dir(exe), appName))
 }
 
 // CommandOrBare is Command with the not-found error folded away, for the many
-// call sites that cannot do anything useful about a missing CLI. The bare "sx"
+// call sites that cannot do anything useful about a missing CLI. The bare "axis"
 // form it falls back to is exactly what these configs contained before, so the
 // worst case is the old behavior rather than a failed install.
 func CommandOrBare(args ...string) string {
@@ -382,18 +388,18 @@ func CommandOrBare(args ...string) string {
 	return cmd
 }
 
-// NeedsRepair reports whether an existing config command was written by sx but
+// NeedsRepair reports whether an existing config command was written by axis but
 // can no longer work, and should therefore be overwritten.
 //
 // Two cases qualify. An entry naming the desktop app's GUI binary was written
 // by a version that used os.Executable() from the app — it can never serve as
-// the CLI, since that binary has no subcommands. An entry naming an sx CLI at a
+// the CLI, since that binary has no subcommands. An entry naming an axis CLI at a
 // path that no longer exists was valid when written and went stale, typically
 // because the app moved or a separately installed CLI was removed.
 //
-// Anything else returns false. A command sx did not write is the user's, and a
+// Anything else returns false. A command axis did not write is the user's, and a
 // hand-written "skills" MCP entry pointing at their own server must survive an
-// sx install untouched.
+// axis install untouched.
 func NeedsRepair(cmd string) bool {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
@@ -401,8 +407,8 @@ func NeedsRepair(cmd string) bool {
 	}
 	// argv[0] first. Consulting the whole string first was wrong in a way that
 	// destroys user config: normalizedBase is the last path segment, so any
-	// multi-token command ending in an sx-like segment ("docker run
-	// ghcr.io/acme/skills", "uv run --directory /opt/tools/sx") looked owned, and
+	// multi-token command ending in an axis-like segment ("docker run
+	// ghcr.io/acme/skills", "uv run --directory /opt/tools/axis") looked owned, and
 	// since the whole string is not a file the verdict came back "repair" — so
 	// Cursor and Kiro would overwrite a hand-written server with their own entry.
 	fields := splitCommand(cmd)
@@ -414,16 +420,16 @@ func NeedsRepair(cmd string) bool {
 
 	// Only then the whole value, and only when it is unambiguously ours: an MCP
 	// "command" is a bare executable path, so an unquoted Windows path with a
-	// space ("C:\\Program Files\\sx\\sx-app.exe") splits into a meaningless
+	// space ("C:\\Program Files\\axis\\axis-app.exe") splits into a meaningless
 	// argv[0]. Requiring either the GUI binary name or a file that actually
 	// exists keeps this branch from reaching the destructive verdict by accident.
 	// Requiring an absolute path keeps a multi-token command out of this branch:
-	// "docker run acme/sx-app" ends in the GUI binary's name but is somebody
+	// "docker run acme/axis-app" ends in the GUI binary's name but is somebody
 	// else's server, and treating it as ours would overwrite their config. An
-	// unquoted "C:\Program Files\sx\sx-app.exe" — the case this branch exists
+	// unquoted "C:\Program Files\axis\axis-app.exe" — the case this branch exists
 	// for — is absolute and still matches.
 	if isAbsolutePath(cmd) {
-		if base := normalizedBase(cmd); base == "sx-app" || base == "sx-app.exe" {
+		if base := normalizedBase(cmd); slices.Contains(legacyAppNames, base) {
 			return true
 		}
 	}
@@ -448,13 +454,13 @@ func isAbsolutePath(p string) bool {
 }
 
 // repairVerdict classifies a single argv[0]. owned is false when the binary is
-// not one sx writes, in which case verdict carries no meaning.
+// not one axis writes, in which case verdict carries no meaning.
 func repairVerdict(argv0 string) (verdict, owned bool) {
 	base := normalizedBase(argv0)
 
-	// sx only ever writes one of two forms: an absolute path, or the bare binary
+	// axis only ever writes one of two forms: an absolute path, or the bare binary
 	// name. Anything relative was written by someone else even when its last
-	// segment looks like ours ("./sx-app", "acme/sx"), and claiming it would
+	// segment looks like ours ("./axis-app", "acme/axis"), and claiming it would
 	// overwrite their config.
 	bare := argv0 == base
 	if !bare && !isAbsolutePath(argv0) {
@@ -462,7 +468,7 @@ func repairVerdict(argv0 string) (verdict, owned bool) {
 	}
 
 	// The GUI binary is ours and is never usable as the CLI.
-	if base == "sx-app" || base == "sx-app.exe" {
+	if slices.Contains(legacyAppNames, base) {
 		return true, true
 	}
 	if slices.Contains(legacyBinaryNames, base) {
@@ -480,10 +486,10 @@ func repairVerdict(argv0 string) (verdict, owned bool) {
 // with the current one.
 //
 // That is NeedsRepair plus two upgrade cases it deliberately excludes. A bare
-// "sx" was written when no CLI could be found; it still works wherever PATH
+// "axis" was written when no CLI could be found; it still works wherever PATH
 // has one, so it is not broken — but once a CLI is resolvable, an absolute
 // path is strictly better, and without this a degraded first install stays
-// degraded forever. And an sx path inside a versioned package-manager tree
+// degraded forever. And an axis path inside a versioned package-manager tree
 // (a Homebrew Cellar keg, recorded before the stable-alias preference
 // existed) still works today but dies on the next upgrade, so it is upgraded
 // while its stable alias exists. Every other absolute spelling — including a
@@ -520,8 +526,8 @@ func ShouldRewrite(cmd string) bool {
 	// upgrading. Any other absolute spelling is the user's own choice
 	// and is left alone — including a different spelling of the same
 	// binary, which would otherwise thrash with PATH order between
-	// terminal and GUI launches. sx never writes a Cellar path itself,
-	// so this cannot flap against sx's own output.
+	// terminal and GUI launches. axis never writes a Cellar path itself,
+	// so this cannot flap against axis's own output.
 	a := brewCellarAlias(argv0)
 	return a != "" && isExecutableFile(a)
 }
@@ -531,10 +537,10 @@ func ShouldRewrite(cmd string) bool {
 //
 // entry is the decoded JSON object for a single server: a "command" plus "args".
 // A broken command is replaced whatever its arguments, since it cannot work as
-// it stands. The bare-"sx" upgrade is held to a stricter test — that entry does
+// it stands. The bare-"axis" upgrade is held to a stricter test — that entry does
 // work, only its path is being improved — so it must leave a hand-written
 // invocation of the same binary alone, which means its arguments have to be the
-// ones sx itself writes.
+// ones axis itself writes.
 func MCPEntryNeedsRewrite(entry any) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
@@ -550,7 +556,7 @@ func MCPEntryNeedsRewrite(entry any) bool {
 	return ShouldRewrite(cmd) && mcpArgsAreOurs(m["args"])
 }
 
-// mcpArgsAreOurs reports whether an entry's args are exactly what sx writes.
+// mcpArgsAreOurs reports whether an entry's args are exactly what axis writes.
 func mcpArgsAreOurs(raw any) bool {
 	args, ok := raw.([]any)
 	if !ok || len(args) != 1 {
@@ -560,7 +566,7 @@ func mcpArgsAreOurs(raw any) bool {
 	return ok && s == "serve"
 }
 
-// ResolveOrBare returns the resolved CLI path, or the bare name "sx" when none
+// ResolveOrBare returns the resolved CLI path, or the bare name "axis" when none
 // can be found.
 //
 // For argv-style fields — an MCP server's "command", which the client execs
@@ -610,14 +616,14 @@ func shellQuote(s string) string {
 	return b.String()
 }
 
-// Managed reports whether cmd is an sx-written invocation of one of the given
-// subcommands. It accepts both the legacy bare-"sx" form and the absolute-path
+// Managed reports whether cmd is an axis-written invocation of one of the given
+// subcommands. It accepts both the legacy bare-"axis" form and the absolute-path
 // form Command produces, so hook detection, upgrade, and removal keep working
 // across the change.
 //
 // subcommands are matched against the argument list, so "install" matches
-// "sx install --hook-mode --client=cline" and "report-usage" matches
-// "/abs/sx report-usage --client=github-copilot".
+// "axis install --hook-mode --client=cline" and "report-usage" matches
+// "/abs/axis report-usage --client=github-copilot".
 func Managed(cmd string, subcommands ...string) bool {
 	fields := splitCommand(cmd)
 	if len(fields) == 0 {
@@ -644,7 +650,7 @@ func Managed(cmd string, subcommands ...string) bool {
 
 // isResolvedCLI reports whether argv0 is the CLI this process would resolve to
 // right now, regardless of what it is called. SX_CLI_PATH can point at a binary
-// with any name, and without this a hook sx wrote from such an override would
+// with any name, and without this a hook axis wrote from such an override would
 // not be recognized as its own — so an upgrade would append a duplicate.
 //
 // Two limits worth knowing. It only helps while that same override is in effect:

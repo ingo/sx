@@ -16,7 +16,7 @@ import (
 
 // "Use in my AI tools": installing an asset delivers its latest revision to
 // every detected AI client (Claude Code, Cursor, …) at user-global scope,
-// through the exact same client implementations `sx install` uses.
+// through the exact same client implementations `axis install` uses.
 
 // AIClient describes one detected AI tool for the frontend.
 type AIClient struct {
@@ -40,7 +40,7 @@ func globalScope() *clients.InstallScope {
 }
 
 // SetAssetPersonal is the durable form of "Use in my AI tools": it makes
-// the asset part of what sx resolves FOR THIS USER (adding a personal user
+// the asset part of what axis resolves FOR THIS USER (adding a personal user
 // scope in the vault when the asset doesn't already reach them), then runs
 // the real sync so files land immediately and every future sync agrees.
 // Disabling removes only the caller's own user scope — never anyone
@@ -206,7 +206,7 @@ func assetReachesUserVia(targets []vaultpkg.InstallTarget, self string, teams fu
 }
 
 // InstalledAssetInfo describes one asset installed on this machine, in ANY
-// scope — whether the app installed it directly or `sx install` (or its
+// scope — whether the app installed it directly or `axis install` (or its
 // client hooks) delivered it via an org/team/repo scope.
 type InstalledAssetInfo struct {
 	Name    string   `json:"name"`
@@ -215,10 +215,10 @@ type InstalledAssetInfo struct {
 }
 
 // InstalledAssets reports what is installed on this machine, from two
-// sources: the shared install tracker (what `sx install` and the app
+// sources: the shared install tracker (what `axis install` and the app
 // recorded, with scope detail) UNION what the detected AI tools actually
 // have on disk. The scan makes the answer survive a lost or stale tracker
-// and covers assets installed outside sx.
+// and covers assets installed outside axis.
 func (a *App) InstalledAssets() ([]InstalledAssetInfo, error) {
 	byName := map[string]*InstalledAssetInfo{}
 
