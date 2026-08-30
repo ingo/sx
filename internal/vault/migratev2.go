@@ -557,11 +557,11 @@ func (g *GitVault) ensureMigratedLocked(ctx context.Context) error {
 	if err := g.gitClient.Commit(ctx, g.repoPath, "Migrate vault storage to format v2"); err != nil {
 		return err
 	}
-	if err := g.pushWithRebaseRetry(ctx); err != nil {
-		// A concurrent client may have pushed its own migration commit,
-		// which a rebase cannot reconcile (both moved the same files).
-		// Discard our local migration and adopt the remote state; if the
-		// remote turns out to be migrated, the caller can proceed.
+	if err := g.gitClient.Push(ctx, g.repoPath); err != nil {
+		// A concurrent client may have pushed its own migration commit —
+		// both moved the same files, so there's no clean way to redo ours
+		// on top. Discard our local migration and adopt the remote state;
+		// if the remote turns out to be migrated, the caller can proceed.
 		if recoverErr := g.discardLocalAndResync(ctx); recoverErr != nil {
 			return fmt.Errorf("failed to push migration commit: %w (recovery also failed: %w)", err, recoverErr)
 		}
@@ -581,10 +581,10 @@ func (g *GitVault) ensureMigratedLocked(ctx context.Context) error {
 // tip, discarding local commits. Used to recover from a lost migration race.
 // The caller must hold the vault flock.
 func (g *GitVault) discardLocalAndResync(ctx context.Context) error {
-	// The failed push retry may have left the clone mid-rebase (the rebase
-	// of our migration commit onto the winner's conflicts by construction —
-	// both moved the same files). Abort it first so the branch is restored;
-	// an error just means no rebase was in progress.
+	// RebaseAbort is a no-op (go-git has no rebase to abort) — kept only so
+	// a cache clone left mid-rebase by a pre-go-git build of this fork gets
+	// a harmless call here rather than a missing method. The Fetch+Reset
+	// below ignore any such stray .git/rebase-merge state either way.
 	_ = g.gitClient.RebaseAbort(ctx, g.repoPath)
 
 	if err := g.gitClient.Fetch(ctx, g.repoPath); err != nil {

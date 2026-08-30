@@ -1,9 +1,11 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -16,6 +18,115 @@ import (
 	"github.com/sleuth-io/sx/v2/internal/manifest"
 	"github.com/sleuth-io/sx/v2/internal/mgmt"
 )
+
+// pathSnapshot captures the on-disk content of a set of paths (files or
+// directories, recursively) relative to a root, so it can be restored after
+// a git reset that would otherwise discard it. go-git has no equivalent to
+// `git restore --staged --worktree -- . ':(exclude)dir'` (restore everything
+// except one path) or true rebase, so both RepairVaultClone (preserve queued
+// usage-event appends while discarding other divergence) and
+// pushWithRetry (redo the one pending commit on a new remote tip without
+// rebasing it) go through this instead: snapshot the paths that must
+// survive, reset hard, write the snapshot back, recommit.
+type pathSnapshot map[string][]byte
+
+func snapshotPaths(root string, paths []string) (pathSnapshot, error) {
+	out := pathSnapshot{}
+	for _, p := range paths {
+		full := filepath.Join(root, p)
+		info, err := os.Stat(full)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			data, err := os.ReadFile(full)
+			if err != nil {
+				return nil, err
+			}
+			out[p] = data
+			continue
+		}
+		walkErr := filepath.WalkDir(full, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			out[rel] = data
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
+	return out, nil
+}
+
+// restore writes the snapshot's captured content back under root.
+func (s pathSnapshot) restore(root string) error {
+	for rel, data := range s {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unionMergeInto merges each snapshotted file's captured lines into
+// whatever now exists on disk at the same path (e.g. after a hard reset to
+// a remote tip that advanced independently), rather than overwriting it —
+// the line-level equivalent of git's built-in `union` merge driver, which
+// go-git has no API for. Used only for .sx/usage/*.jsonl: one JSON event
+// per line, order-independent, so a correct merge of two divergent copies
+// is exactly the deduplicated union of both sides' lines.
+func (s pathSnapshot) unionMergeInto(root string) error {
+	for rel, oldData := range s {
+		full := filepath.Join(root, rel)
+		newData, err := os.ReadFile(full)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, unionLines(newData, oldData), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unionLines concatenates the deduplicated, non-empty lines of a followed
+// by b, preserving a's lines first (whatever's already on disk) then any
+// of b's lines (the snapshotted queued content) not already present.
+func unionLines(a, b []byte) []byte {
+	seen := make(map[string]bool)
+	var out bytes.Buffer
+	for _, data := range [][]byte{a, b} {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line == "" || seen[line] {
+				continue
+			}
+			seen[line] = true
+			out.WriteString(line)
+			out.WriteByte('\n')
+		}
+	}
+	return out.Bytes()
+}
 
 // usagePushInterval is the minimum gap between successive
 // commit-and-push cycles for usage events. Picked to balance
@@ -35,9 +146,9 @@ var usagePushInterval = time.Hour
 //  5. Stages sx.toml and .sx/ specifically (not the whole tree) so stale
 //     install.sh/README.md or partial asset writes don't ride along.
 //  6. Commits with commitMsg and pushes. On push rejection (another
-//     process raced us), rebases local commits onto the new remote head
-//     and retries once. Both errors are wrapped so troubleshooting
-//     shows which leg failed.
+//     process raced us), fetches the new remote tip and redoes the same
+//     commit on top of it (see pushWithRetry), then retries. Both errors
+//     are wrapped so troubleshooting shows which leg failed.
 //
 // Any path in the staging list that doesn't exist yet is skipped —
 // critical for empty vaults, where the very first `sx team create`
@@ -68,7 +179,8 @@ func (g *GitVault) runInVaultTx(ctx context.Context, commitMsg string, fn func(v
 		return err
 	}
 
-	for _, rel := range []string{manifest.FileName, ".sx"} {
+	stagePaths := []string{manifest.FileName, ".sx"}
+	for _, rel := range stagePaths {
 		if _, statErr := os.Stat(filepath.Join(g.repoPath, rel)); os.IsNotExist(statErr) {
 			continue
 		}
@@ -88,18 +200,22 @@ func (g *GitVault) runInVaultTx(ctx context.Context, commitMsg string, fn func(v
 		return err
 	}
 
-	return g.pushWithRebaseRetry(ctx)
+	return g.pushWithRetry(ctx, commitMsg, stagePaths)
 }
 
-// pushWithRebaseRetry pushes the staged commit, rebasing and retrying on
-// non-fast-forward rejection. Each iteration is: push; on failure, rebase
-// onto the remote head and try again. Under high concurrency a single
-// retry isn't enough — between our rebase and our next push, a third
-// process can push again and reject us — so the loop runs up to
-// maxAttempts full push attempts with maxAttempts-1 rebases between
-// them. Anything beyond that is probably a genuine conflict or a broken
-// remote and surfaces to the caller.
-func (g *GitVault) pushWithRebaseRetry(ctx context.Context) error {
+// pushWithRetry pushes the just-made commit, retrying on non-fast-forward
+// rejection. There is always exactly one pending commit at this point (every
+// caller commits immediately before calling this), so "resolve the
+// conflict" doesn't need true rebase: snapshot the paths that commit
+// touched, fetch, hard-reset to the new remote tip (discarding the
+// now-orphaned local commit along with it), write the snapshot back, and
+// recommit with the same message on top of the new base. Under high
+// concurrency a single retry isn't enough — between our reset and our next
+// push, a third process can push again and reject us — so the loop runs up
+// to maxAttempts full push attempts with maxAttempts-1 redo-and-retries
+// between them. Anything beyond that is probably a genuine conflict or a
+// broken remote and surfaces to the caller.
+func (g *GitVault) pushWithRetry(ctx context.Context, commitMsg string, paths []string) error {
 	const maxAttempts = 3
 	var lastPushErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -111,8 +227,8 @@ func (g *GitVault) pushWithRebaseRetry(ctx context.Context) error {
 		if attempt == maxAttempts {
 			break
 		}
-		if err := g.gitClient.PullRebase(ctx, g.repoPath); err != nil {
-			return fmt.Errorf("push failed: %w; rebase also failed: %w", pushErr, err)
+		if err := g.redoCommitOnNewTip(ctx, commitMsg, paths); err != nil {
+			return fmt.Errorf("push failed: %w; redo also failed: %w", pushErr, err)
 		}
 		// Jittered backoff: 50–250ms after attempt 1, 100–500ms after
 		// attempt 2. The jitter desynchronizes retry storms from other
@@ -126,6 +242,79 @@ func (g *GitVault) pushWithRebaseRetry(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("push failed after %d attempts: %w", maxAttempts, lastPushErr)
+}
+
+// redoCommitOnNewTip snapshots paths (the just-committed change), fetches,
+// hard-resets to the new remote tip, restores the snapshot, and recommits
+// with the same message — see pushWithRetry.
+func (g *GitVault) redoCommitOnNewTip(ctx context.Context, commitMsg string, paths []string) error {
+	snap, err := snapshotPaths(g.repoPath, paths)
+	if err != nil {
+		return fmt.Errorf("failed to snapshot pending commit: %w", err)
+	}
+	if err := g.gitClient.Fetch(ctx, g.repoPath); err != nil {
+		return err
+	}
+	branch, err := g.gitClient.GetCurrentBranch(ctx, g.repoPath)
+	if err != nil {
+		return err
+	}
+	if err := g.gitClient.Reset(ctx, g.repoPath, "hard", "origin/"+branch); err != nil {
+		return err
+	}
+	if err := snap.restore(g.repoPath); err != nil {
+		return fmt.Errorf("failed to restore pending commit onto new tip: %w", err)
+	}
+	for _, rel := range paths {
+		if _, statErr := os.Stat(filepath.Join(g.repoPath, rel)); os.IsNotExist(statErr) {
+			continue
+		}
+		if err := g.gitClient.Add(ctx, g.repoPath, rel); err != nil {
+			return err
+		}
+	}
+	hasChanges, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
+	if err != nil {
+		return err
+	}
+	if !hasChanges {
+		// The remote's new tip already carries an equivalent change (another
+		// process committed the same thing) — nothing left to redo.
+		return nil
+	}
+	return g.gitClient.Commit(ctx, g.repoPath, commitMsg)
+}
+
+// reconcileDivergedUsage handles the one divergence a plain pull() can hit
+// under normal operation: RecordUsageEvents committed queued usage events
+// locally (throttling only the push, per maybePushUsage) while the remote
+// advanced independently — its own usage commit, or anything else. It
+// snapshots the local .sx/usage content, hard-resets to the remote tip
+// (discarding the now-orphaned local commit(s) along with it, same as
+// redoCommitOnNewTip), then union-merges the snapshotted lines into
+// whatever the reset just checked out — see pathSnapshot.unionMergeInto.
+// The merged files are left in the working tree uncommitted; the caller
+// (RecordUsageEvents/runInVaultTx) already stages, commits, and
+// pushes-with-retry afterward, so this only needs to fix up content.
+func (g *GitVault) reconcileDivergedUsage(ctx context.Context) error {
+	snap, err := snapshotPaths(g.repoPath, []string{mgmt.UsageDirName})
+	if err != nil {
+		return fmt.Errorf("failed to snapshot queued usage events: %w", err)
+	}
+	if err := g.gitClient.Fetch(ctx, g.repoPath); err != nil {
+		return err
+	}
+	branch, err := g.gitClient.GetCurrentBranch(ctx, g.repoPath)
+	if err != nil {
+		return err
+	}
+	if err := g.gitClient.Reset(ctx, g.repoPath, "hard", "origin/"+branch); err != nil {
+		return err
+	}
+	if err := snap.unionMergeInto(g.repoPath); err != nil {
+		return fmt.Errorf("failed to merge queued usage events onto new tip: %w", err)
+	}
+	return nil
 }
 
 // RepairVaultClone re-syncs the local vault cache to the remote, discarding any
@@ -184,25 +373,40 @@ func (g *GitVault) RepairVaultClone(ctx context.Context) (discardedTip string, e
 		return "", nil // already in sync — nothing to repair
 	}
 
-	// Move the branch back to the remote tip (soft, so the net diff is staged),
-	// then restore everything except the usage dir to the remote — discarding
-	// local manifest/asset divergence but leaving queued usage appends staged.
-	if err := g.gitClient.Reset(ctx, g.repoPath, "soft", remoteRef); err != nil {
-		return "", err
-	}
-	if err := g.gitClient.RestoreExcept(ctx, g.repoPath, mgmt.UsageDirName); err != nil {
-		return "", err
-	}
-	hasUsage, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
+	// Preserve any locally queued usage-event appends by snapshotting their
+	// current content before discarding everything else: they're append-only
+	// JSONL logs this process only ever adds to, so writing the captured
+	// bytes back verbatim after a hard reset reproduces what
+	// `git restore --staged --worktree -- . ':(exclude)usage-dir'` used to
+	// achieve, without needing the index/worktree-restore-with-exclusion
+	// plumbing go-git doesn't expose at that granularity.
+	usageSnap, err := snapshotPaths(g.repoPath, []string{mgmt.UsageDirName})
 	if err != nil {
+		return "", fmt.Errorf("failed to snapshot queued usage events: %w", err)
+	}
+
+	if err := g.gitClient.Reset(ctx, g.repoPath, "hard", remoteRef); err != nil {
 		return "", err
 	}
-	if hasUsage {
-		if err := g.gitClient.Commit(ctx, g.repoPath, "Record usage events"); err != nil {
+	if err := usageSnap.restore(g.repoPath); err != nil {
+		return "", fmt.Errorf("failed to restore queued usage events: %w", err)
+	}
+
+	if len(usageSnap) > 0 {
+		if err := g.gitClient.Add(ctx, g.repoPath, mgmt.UsageDirName); err != nil {
 			return "", err
 		}
-		if err := g.pushWithRebaseRetry(ctx); err != nil {
+		hasUsage, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
+		if err != nil {
 			return "", err
+		}
+		if hasUsage {
+			if err := g.gitClient.Commit(ctx, g.repoPath, "Record usage events"); err != nil {
+				return "", err
+			}
+			if err := g.pushWithRetry(ctx, "Record usage events", []string{mgmt.UsageDirName}); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -508,8 +712,12 @@ func (g *GitVault) maybePushUsage(ctx context.Context) error {
 	}
 
 	// Throttle only the push. Any local commits made above stay in
-	// place; pushWithRebaseRetry will batch them on the next call
-	// past the throttle window.
+	// place; pushWithRetry will batch them on the next call past the
+	// throttle window — its redo-on-conflict snapshots and recommits
+	// mgmt.UsageDirName's current content regardless of how many
+	// commits produced it, so accumulated commits collapse into one
+	// on retry. That's fine here: it's usage telemetry bookkeeping,
+	// not history anyone reads commit-by-commit.
 	if info, statErr := os.Stat(sentinel); statErr == nil {
 		if time.Since(info.ModTime()) < usagePushInterval {
 			return nil
@@ -518,7 +726,7 @@ func (g *GitVault) maybePushUsage(ctx context.Context) error {
 		return statErr
 	}
 
-	if err := g.pushWithRebaseRetry(ctx); err != nil {
+	if err := g.pushWithRetry(ctx, "Record usage events", []string{mgmt.UsageDirName}); err != nil {
 		return err
 	}
 	return touchSentinel(sentinel)

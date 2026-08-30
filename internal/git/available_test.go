@@ -5,24 +5,14 @@ import (
 	"testing"
 )
 
-func TestCheckAvailabilityFindsGit(t *testing.T) {
-	// The dev/CI environment always has a working git.
+func TestCheckAvailabilityAlwaysAvailable(t *testing.T) {
+	// go-git is embedded — there is no system binary that could be missing,
+	// unlike when this package shelled out to a system git.
 	av := CheckAvailability(context.Background())
 	if !av.Available {
-		t.Fatalf("git should be available here, got reason %q", av.Reason)
+		t.Fatalf("git should always be available (embedded via go-git), got reason %q", av.Reason)
 	}
-	if av.Version == "" || av.Reason != "" {
-		t.Errorf("availability = %+v, want version set and no reason", av)
-	}
-}
-
-func TestCheckAvailabilityMissingGit(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	av := CheckAvailability(context.Background())
-	if av.Available {
-		t.Fatal("git should not be found with an empty PATH")
-	}
-	if av.Reason == "" {
-		t.Error("a missing git should carry a user-facing reason")
+	if av.Reason != "" {
+		t.Errorf("availability = %+v, want no reason", av)
 	}
 }

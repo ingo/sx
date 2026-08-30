@@ -2,49 +2,33 @@ package git
 
 import (
 	"context"
-	"os/exec"
-	"runtime"
-	"strings"
-	"time"
+	"runtime/debug"
 )
 
-// Availability reports whether a usable git binary exists on this machine.
-// Reason is a short, user-facing sentence when git is unusable.
+// Availability reports whether git operations can run. Kept for API
+// compatibility with callers written when this package shelled out to a
+// system git binary — with go-git embedded, there is no external binary to
+// probe for, so this always reports available.
 type Availability struct {
 	Available bool
 	Version   string
 	Reason    string
 }
 
-// CheckAvailability probes for a working git without ever triggering
-// side effects. The macOS trap: on a Mac without the Xcode Command Line
-// Tools, /usr/bin/git is a shim whose mere execution (even `git
-// --version`) pops Apple's GUI installer dialog — so on darwin the
-// developer-tools presence is checked first via `xcode-select -p`, and
-// the shim is never run when the tools are missing.
+// CheckAvailability always reports git as available: operations go through
+// go-git, an embedded pure-Go implementation, not a system git binary users
+// would need to install. Version reports the embedded go-git module version
+// when build info is present (always true for a compiled binary; absent
+// only when running via `go run`).
 func CheckAvailability(ctx context.Context) Availability {
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		return Availability{Reason: "Git isn't installed on this computer."}
-	}
-
-	if runtime.GOOS == "darwin" && gitPath == "/usr/bin/git" {
-		// xcode-select exits non-zero when no developer directory is
-		// configured, i.e. the Command Line Tools are not installed.
-		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		if err := exec.CommandContext(probe, "xcode-select", "-p").Run(); err != nil {
-			return Availability{Reason: "Git needs Apple's command-line developer tools, which aren't installed."}
+	version := "embedded"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/go-git/go-git/v5" {
+				version = "go-git " + dep.Version
+				break
+			}
 		}
 	}
-
-	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(probe, gitPath, "--version").Output()
-	if err != nil {
-		return Availability{Reason: "Git is installed but isn't working (git --version failed)."}
-	}
-	version := strings.TrimSpace(string(out))
-	version = strings.TrimPrefix(version, "git version ")
 	return Availability{Available: true, Version: version}
 }

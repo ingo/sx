@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1714,9 +1713,8 @@ func TestOpenSkillsNewValidation(t *testing.T) {
 }
 
 func TestBuildGitClientOptionsAuthTokenRouting(t *testing.T) {
-	sshEnv := envFromOptions(t, "git@gitlab.com:org/repo.git", GitOptions{AuthToken: "token"})
-	if hasGitBasicAuthEnv(sshEnv) {
-		t.Fatalf("SSH remote configured HTTP basic auth env: %v", sshEnv)
+	if _, _, ok := basicAuthFromOptions(t, "git@gitlab.com:org/repo.git", GitOptions{AuthToken: "token"}); ok {
+		t.Fatal("SSH remote configured HTTP basic auth")
 	}
 	if _, err := buildGitClientOptions("https:///org/repo.git", GitOptions{AuthToken: "token"}); err == nil {
 		t.Fatal("malformed HTTPS remote with token succeeded, want error")
@@ -1727,69 +1725,40 @@ func TestBuildGitClientOptionsAuthTokenRouting(t *testing.T) {
 	if _, err := buildGitClientOptions("https:///org/repo.git", GitOptions{}); err == nil {
 		t.Fatal("malformed HTTPS remote without token succeeded, want error")
 	}
-	httpEnv := envFromOptions(t, "http://git.example.test/org/repo.git", GitOptions{AuthToken: "token"})
-	if !strings.Contains(strings.Join(httpEnv, "\n"), "http.http://git.example.test/.extraheader") {
-		t.Fatalf("HTTP remote did not configure HTTP basic auth env: %v", httpEnv)
+	if _, _, ok := basicAuthFromOptions(t, "http://git.example.test/org/repo.git", GitOptions{AuthToken: "token"}); !ok {
+		t.Fatal("HTTP remote did not configure HTTP basic auth")
 	}
-	// HTTPS is the dominant real-world case; lock in that the basic-auth
-	// env header is set for https://github.com and that the default
-	// username on this host is "x-access-token".
-	githubEnv := envFromOptions(t, "https://github.com/org/repo.git", GitOptions{AuthToken: "token"})
-	if !strings.Contains(strings.Join(githubEnv, "\n"), "http.https://github.com/.extraheader") {
-		t.Fatalf("HTTPS GitHub remote did not configure HTTP basic auth env: %v", githubEnv)
-	}
-	user, pass := decodeBasicAuth(t, githubEnv)
-	if user != "x-access-token" || pass != "token" {
-		t.Fatalf("github.com basic auth = %q:%q, want x-access-token:token", user, pass)
+	// HTTPS is the dominant real-world case; lock in that basic auth is
+	// configured for https://github.com and that the default username on
+	// this host is "x-access-token".
+	user, pass, ok := basicAuthFromOptions(t, "https://github.com/org/repo.git", GitOptions{AuthToken: "token"})
+	if !ok || user != "x-access-token" || pass != "token" {
+		t.Fatalf("github.com basic auth = %q:%q ok=%v, want x-access-token:token", user, pass, ok)
 	}
 	// gitlab.com must pick the oauth2 username automatically — regression
 	// guard on the DefaultHTTPAuthUsername GitLab branch.
-	gitlabEnv := envFromOptions(t, "https://gitlab.com/org/repo.git", GitOptions{AuthToken: "token"})
-	user, pass = decodeBasicAuth(t, gitlabEnv)
-	if user != "oauth2" || pass != "token" {
-		t.Fatalf("gitlab.com basic auth = %q:%q, want oauth2:token", user, pass)
+	user, pass, ok = basicAuthFromOptions(t, "https://gitlab.com/org/repo.git", GitOptions{AuthToken: "token"})
+	if !ok || user != "oauth2" || pass != "token" {
+		t.Fatalf("gitlab.com basic auth = %q:%q ok=%v, want oauth2:token", user, pass, ok)
 	}
-	// SSHKeyPath + AuthToken on an HTTPS URL: SSH key wins and the basic
-	// auth env must NOT be set, since the underlying git client rewrites
-	// the URL to SSH and the basic-auth header would never apply.
-	bothEnv := envFromOptions(t, "https://github.com/org/repo.git", GitOptions{
+	// SSHKeyPath + AuthToken on an HTTPS URL: SSH key wins and basic auth
+	// must NOT be configured, since the underlying git client rewrites the
+	// URL to SSH and the basic-auth credentials would never apply.
+	if _, _, ok := basicAuthFromOptions(t, "https://github.com/org/repo.git", GitOptions{
 		AuthToken:  "token",
 		SSHKeyPath: "/keys/id_ed25519",
-	})
-	if hasGitBasicAuthEnv(bothEnv) {
-		t.Fatalf("SSHKeyPath did not suppress HTTPS basic auth env: %v", bothEnv)
+	}); ok {
+		t.Fatal("SSHKeyPath did not suppress HTTPS basic auth")
 	}
 }
 
-func decodeBasicAuth(t *testing.T, env []string) (string, string) {
-	t.Helper()
-	const prefix = "AUTHORIZATION: basic "
-	for _, e := range env {
-		_, encoded, ok := strings.Cut(e, prefix)
-		if !ok {
-			continue
-		}
-		raw, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			t.Fatalf("decode basic auth %q: %v", encoded, err)
-		}
-		user, pass, ok := strings.Cut(string(raw), ":")
-		if !ok {
-			t.Fatalf("basic auth payload missing colon: %q", raw)
-		}
-		return user, pass
-	}
-	t.Fatalf("env had no AUTHORIZATION header: %v", env)
-	return "", ""
-}
-
-func envFromOptions(t *testing.T, repoURL string, opts GitOptions) []string {
+func basicAuthFromOptions(t *testing.T, repoURL string, opts GitOptions) (username, password string, ok bool) {
 	t.Helper()
 	gitOpts, err := buildGitClientOptions(repoURL, opts)
 	if err != nil {
 		t.Fatalf("buildGitClientOptions(%q): %v", repoURL, err)
 	}
-	return git.NewClientWithOptions(gitOpts...).ExtraEnv()
+	return git.NewClientWithOptions(gitOpts...).HTTPBasicAuth()
 }
 
 func newGitVaultClient(t *testing.T) (string, *Client) {

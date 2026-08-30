@@ -2,16 +2,19 @@ package git
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/spf13/cobra"
 
 	"github.com/sleuth-io/sx/v2/internal/logger"
@@ -65,17 +68,19 @@ func GetSSHKeyPath() string {
 	return globalSSHKeyPath
 }
 
-// Client provides high-level git operations with SSH key support
+// Client provides high-level git operations backed by go-git — an embedded,
+// pure-Go implementation, not a wrapper around a system git binary. No
+// external git installation is required.
 type Client struct {
-	sshKeyPath string
-	extraEnv   []string
+	sshKeyPath  string
+	httpAuth    *githttp.BasicAuth
+	authorName  string
+	authorEmail string
 }
 
 // NewClient creates a new git client using the global SSH key path
 func NewClient() *Client {
-	return &Client{
-		sshKeyPath: GetSSHKeyPath(),
-	}
+	return &Client{sshKeyPath: GetSSHKeyPath()}
 }
 
 type ClientOption func(*Client)
@@ -90,264 +95,381 @@ func NewClientWithOptions(opts ...ClientOption) *Client {
 	return c
 }
 
-func WithEnv(env ...string) ClientOption {
-	return func(c *Client) {
-		c.extraEnv = append(c.extraEnv, env...)
-	}
-}
-
-// WithSSHKey overrides the SSH key path that would otherwise be inherited
-// from the process-global value set by SetSSHKeyPath. Library consumers that
-// don't go through the CLI flag/env wiring should use this to scope an SSH
-// key to a single git.Client.
+// WithSSHKey overrides the SSH key path (or inline PEM content) that would
+// otherwise be inherited from the process-global value set by
+// SetSSHKeyPath. Library consumers that don't go through the CLI flag/env
+// wiring should use this to scope an SSH key to a single git.Client.
 func WithSSHKey(path string) ClientOption {
-	return func(c *Client) {
-		c.sshKeyPath = path
-	}
+	return func(c *Client) { c.sshKeyPath = path }
 }
 
+// WithCommitActor sets the author/committer identity used by Commit. When
+// unset, Commit falls back to the git global config's user.name/user.email.
 func WithCommitActor(name, email string) ClientOption {
-	env := []string{}
-	if name != "" {
-		env = append(env, "GIT_AUTHOR_NAME="+name, "GIT_COMMITTER_NAME="+name)
+	return func(c *Client) {
+		c.authorName = name
+		c.authorEmail = email
 	}
-	if email != "" {
-		env = append(env, "GIT_AUTHOR_EMAIL="+email, "GIT_COMMITTER_EMAIL="+email)
-	}
-	return WithEnv(env...)
 }
 
 func WithHTTPSBasicAuth(host, username, password string) ClientOption {
 	return WithHTTPBasicAuth("https", host, username, password)
 }
 
+// WithHTTPBasicAuth configures HTTP(S) basic auth for remote operations.
+// scheme/host are accepted for call-site compatibility with the pre-go-git
+// API (which scoped credentials to a specific host via a git config
+// extraheader) but are otherwise unused: go-git's http.BasicAuth applies to
+// whichever remote a given operation targets, and every Client here only
+// ever talks to the one remote it was built for.
 func WithHTTPBasicAuth(scheme, host, username, password string) ClientOption {
-	scheme = strings.TrimSpace(strings.ToLower(scheme))
-	if scheme == "" {
-		scheme = "https"
-	}
 	if host == "" || username == "" || password == "" {
 		return nil
 	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-	return WithEnv(
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http."+scheme+"://"+host+"/.extraheader",
-		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic "+encoded,
-	)
-}
-
-func (c *Client) ExtraEnv() []string {
-	if c == nil {
-		return nil
+	return func(c *Client) {
+		c.httpAuth = &githttp.BasicAuth{Username: username, Password: password}
 	}
-	return append([]string(nil), c.extraEnv...)
 }
 
-func (c *Client) command(ctx context.Context, args ...string) *exec.Cmd {
-	return execGitCommandWithEnv(ctx, c.sshKeyPath, c.extraEnv, args...)
+// HTTPBasicAuth returns the configured HTTP basic-auth credentials, if any —
+// an introspection point for tests and callers that need to confirm what
+// was actually configured.
+func (c *Client) HTTPBasicAuth() (username, password string, ok bool) {
+	if c == nil || c.httpAuth == nil {
+		return "", "", false
+	}
+	return c.httpAuth.Username, c.httpAuth.Password, true
 }
 
-func (c *Client) commandWithURL(ctx context.Context, repoURL string, args ...string) (*exec.Cmd, string, error) {
-	return execGitCommandWithURLAndEnv(ctx, c.sshKeyPath, c.extraEnv, repoURL, args...)
+// resolveAuth returns the transport.AuthMethod for this client's configured
+// credentials — explicit HTTP basic auth takes priority; otherwise an SSH
+// key, if one was configured. Neither is required (public repos need none).
+func (c *Client) resolveAuth(repoURL string) (transport.AuthMethod, error) {
+	if c.httpAuth != nil {
+		return c.httpAuth, nil
+	}
+	if c.sshKeyPath == "" {
+		return nil, nil
+	}
+	if err := ValidateSSHKey(c.sshKeyPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	user := "git"
+	if info := ParseRemoteAuthInfo(repoURL); info.SSH {
+		if u, _, ok := strings.Cut(strings.TrimPrefix(repoURL, "ssh://"), "@"); ok {
+			user = u
+		} else if at := strings.IndexByte(repoURL, '@'); at > 0 {
+			user = repoURL[:at]
+		}
+	}
+	if isSSHKeyContent(c.sshKeyPath) {
+		keys, err := gitssh.NewPublicKeys(user, []byte(c.sshKeyPath), "")
+		if err != nil {
+			return nil, fmt.Errorf("invalid SSH key content: %w", err)
+		}
+		return keys, nil
+	}
+	keys, err := gitssh.NewPublicKeysFromFile(user, c.sshKeyPath, "")
+	if err != nil {
+		return nil, fmt.Errorf("invalid SSH key file %s: %w", c.sshKeyPath, err)
+	}
+	return keys, nil
 }
 
-// Clone clones a git repository to the specified destination path
+// resolveURL converts repoURL to SSH form when an SSH key is configured and
+// the URL is HTTPS — matching the pre-go-git behavior of preferring the key
+// the caller explicitly provided over whatever scheme the URL happens to use.
+func (c *Client) resolveURL(repoURL string) (string, error) {
+	if c.sshKeyPath != "" && IsHTTPSURL(repoURL) {
+		return ConvertToSSH(repoURL)
+	}
+	return repoURL, nil
+}
+
+// isEmptyRemoteError reports whether err is go-git's sentinel for "the
+// remote has no refs at all" — an expected state for a freshly created
+// vault repo, not a failure.
+func isEmptyRemoteError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "remote repository is empty")
+}
+
+// Clone clones a git repository to the specified destination path. A
+// genuinely empty remote (no commits, no refs) is not something go-git's
+// PlainClone can produce — verified directly: it errors and leaves no .git
+// behind at all — so that case falls back to init + configure the remote,
+// which is the same end state `git clone` itself leaves for an empty repo.
 func (c *Client) Clone(ctx context.Context, repoURL, destPath string) error {
-	// Ensure parent directory exists
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	cmd, _, err := c.commandWithURL(ctx, repoURL, "clone", "--quiet")
+	url, err := c.resolveURL(repoURL)
+	if err != nil {
+		return err
+	}
+	auth, err := c.resolveAuth(repoURL)
 	if err != nil {
 		return err
 	}
 
-	// Append destination path
-	cmd.Args = append(cmd.Args, destPath)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return classifyRemoteError(repoURL, string(output), err)
+	repo, err := git.PlainCloneContext(ctx, destPath, false, &git.CloneOptions{
+		URL:  url,
+		Auth: auth,
+	})
+	if err == nil {
+		return setRemoteHead(repo)
+	}
+	if !isEmptyRemoteError(err) {
+		return classifyRemoteError(repoURL, err.Error(), err)
 	}
 
+	// Empty remote: same end state as `git clone` on an empty repo — an
+	// initialized working copy with origin configured, HEAD pointing at an
+	// unborn "main" (matching GitHub/GitLab's own default for new repos,
+	// not go-git's PlainInit default of "master"), nothing checked out yet.
+	repo, err = git.PlainInitWithOptions(destPath, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to init empty vault clone: %w", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}}); err != nil {
+		return fmt.Errorf("failed to configure origin remote: %w", err)
+	}
 	return nil
 }
 
-// Fetch fetches all remotes in the repository
+// setRemoteHead records refs/remotes/origin/HEAD as a symbolic ref to the
+// branch actually checked out by the clone. The git CLI always sets this up
+// on a non-single-branch clone; go-git's PlainClone does not (only its
+// single-branch mode does, and Clone deliberately clones every branch, not
+// just one). GetDefaultBranch depends on this ref to find the remote's
+// default branch on a long-lived cached clone that may since have been
+// switched to some other branch.
+func setRemoteHead(repo *git.Repository) error {
+	head, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("failed to resolve cloned HEAD: %w", err)
+	}
+	if !head.Name().IsBranch() {
+		return nil
+	}
+	target := plumbing.ReferenceName("refs/remotes/origin/" + head.Name().Short())
+	ref := plumbing.NewSymbolicReference(plumbing.ReferenceName("refs/remotes/origin/HEAD"), target)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return fmt.Errorf("failed to record origin/HEAD: %w", err)
+	}
+	return nil
+}
+
+// Fetch fetches the origin remote. A remote with no refs at all (an empty
+// vault repo nobody has pushed to yet) is not an error.
 func (c *Client) Fetch(ctx context.Context, repoPath string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "fetch", "--quiet", "--all")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	remoteURL := c.remoteLocation(repo)
+	auth, err := c.resolveAuth(remoteURL)
+	if err != nil {
+		return err
 	}
 
-	return nil
-}
-
-// repoSelectingEnv are variables that select or redirect a repository
-// before any discovery happens. Git exports them to hook processes and
-// to rebase/bisect helpers, so an sx invoked from inside a git hook
-// inherits them — and an inherited GIT_DIR outranks both cmd.Dir and
-// GIT_CEILING_DIRECTORIES, silently redirecting a command at the
-// caller's own repository, while GIT_INDEX_FILE/GIT_WORK_TREE would
-// make even a clone write outside its destination. Stripped for every
-// invocation (see execGitCommandWithEnv), and filtered out rather than
-// set to empty: git's "unset vs empty" semantics differ by version (the
-// same reasoning documented for GIT_ASKPASS in command.go).
-var repoSelectingEnv = []string{
-	"GIT_DIR",
-	"GIT_WORK_TREE",
-	"GIT_INDEX_FILE",
-	"GIT_OBJECT_DIRECTORY",
-	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
-	"GIT_COMMON_DIR",
-}
-
-// commandInRepo builds a git command that runs inside repoPath and can
-// never escape it: GIT_CEILING_DIRECTORIES stops repository discovery
-// at the parent, so a directory whose .git is unusable errors out
-// instead of resolving to an enclosing repository (a dotfiles-managed
-// $HOME, a hand-set SX_CACHE_DIR inside a checkout) and reading or
-// mutating it. Inherited repo-selecting env vars are already stripped
-// for every command by execGitCommandWithEnv. Every command addressed
-// at a repo root must use this rather than setting cmd.Dir directly, so
-// the guard cannot be missed one method at a time.
-func (c *Client) commandInRepo(ctx context.Context, repoPath string, args ...string) *exec.Cmd {
-	cmd := c.command(ctx, args...)
-	cmd.Dir = repoPath
-	cmd.Env = append(cmd.Env, "GIT_CEILING_DIRECTORIES="+filepath.Dir(repoPath))
-	return cmd
-}
-
-// withoutEnv returns env with every entry whose name is in names removed.
-func withoutEnv(env []string, names []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if slices.Contains(names, name) {
-			continue
-		}
-		out = append(out, kv)
+	err = repo.FetchContext(ctx, &git.FetchOptions{RemoteName: "origin", Auth: auth})
+	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) || isEmptyRemoteError(err) {
+		return nil
 	}
-	return out
+	return classifyRemoteError(remoteURL, err.Error(), err)
 }
 
-// Reset runs `git reset --<mode> <ref>` in repoPath. Used by vault-clone
-// repair to move the branch pointer back to the remote tip.
+// resetModes maps the CLI-style mode name used by callers (mirroring the
+// pre-go-git `git reset --<mode>` API) to go-git's ResetMode.
+var resetModes = map[string]git.ResetMode{
+	"soft":  git.SoftReset,
+	"mixed": git.MixedReset,
+	"hard":  git.HardReset,
+}
+
+// Reset moves HEAD (and, depending on mode, the index/worktree) to ref.
+// Used by vault-clone repair to move the branch pointer back to the remote
+// tip.
 func (c *Client) Reset(ctx context.Context, repoPath, mode, ref string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "reset", "--"+mode, ref)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git reset --%s %s failed: %w: %s", mode, ref, err, strings.TrimSpace(string(output)))
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	resetMode, ok := resetModes[mode]
+	if !ok {
+		return fmt.Errorf("unknown reset mode: %s", mode)
+	}
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return fmt.Errorf("failed to resolve %s: %w", ref, err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	if err := wt.Reset(&git.ResetOptions{Mode: resetMode, Commit: *hash}); err != nil {
+		return fmt.Errorf("git reset --%s %s failed: %w", mode, ref, err)
 	}
 	return nil
 }
 
-// RebaseAbort aborts an in-progress rebase, restoring the pre-rebase branch
-// state. Returns an error when no rebase is in progress; callers recovering
-// from a possibly-failed rebase should treat that as a no-op.
+// RebaseAbort is a no-op: go-git has no rebase support to abort, and the
+// sole caller (a v1-vault migration path predating this fork, run against
+// vaults that only ever existed in go-git-managed form) already discards
+// this error, treating it as best-effort cleanup either way.
 func (c *Client) RebaseAbort(ctx context.Context, repoPath string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "rebase", "--abort")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git rebase --abort failed: %w: %s", err, strings.TrimSpace(string(output)))
-	}
 	return nil
 }
 
-// RestoreExcept restores all tracked files in both the index and worktree to
-// HEAD, except those under excludeDir. Used by vault-clone repair to discard
-// local manifest/asset divergence while leaving the queued usage appends under
-// excludeDir staged for a follow-up commit.
-func (c *Client) RestoreExcept(ctx context.Context, repoPath, excludeDir string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "restore", "--staged", "--worktree", "--", ".", ":(exclude)"+excludeDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git restore failed: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
+// IsNonFastForwardError reports whether err is go-git's sentinel for a pull
+// that can't fast-forward — real divergent histories, not a network or auth
+// failure. Pull only supports fast-forward merges: go-git has no 3-way merge
+// and no equivalent of git's gitattributes merge drivers (e.g. the built-in
+// `union` driver .sx/usage/*.jsonl relies on), so a caller that needs to
+// reconcile genuine divergence must detect this and handle it itself rather
+// than treating every Pull failure as fatal.
+func IsNonFastForwardError(err error) bool {
+	return errors.Is(err, git.ErrNonFastForwardUpdate)
 }
 
-// Pull pulls changes from the remote repository
+// Pull fetches and merges origin's current branch into the worktree.
 func (c *Client) Pull(ctx context.Context, repoPath string) error {
 	log := logger.Get()
 	start := time.Now()
 	log.Debug("git pull starting", "repoPath", repoPath)
 
-	// --no-rebase pins the reconciliation strategy to merge so newer
-	// git (≥2.27) doesn't refuse to pull divergent branches without an
-	// explicit pull.rebase / pull.ff setting. The merge path is also
-	// what lets gitattributes merge=union drivers run on conflicting
-	// append-only files like .sx/usage/*.jsonl.
-	cmd := c.commandInRepo(ctx, repoPath, "pull", "--no-rebase", "--no-edit", "--quiet")
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	remoteURL := c.remoteLocation(repo)
+	auth, err := c.resolveAuth(remoteURL)
+	if err != nil {
+		return err
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
 
-	output, err := cmd.CombinedOutput()
+	err = wt.PullContext(ctx, &git.PullOptions{RemoteName: "origin", Auth: auth})
 	log.Debug("git pull completed", "duration", time.Since(start), "error", err)
 
-	if err != nil {
-		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
+	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
 	}
-
-	return nil
+	return classifyRemoteError(remoteURL, err.Error(), err)
 }
 
-// PullRebase pulls changes from the remote repository and rebases local
-// commits on top. Used by runInVaultTx to resolve concurrent pushes from
-// multiple sx processes writing to the same management files.
-func (c *Client) PullRebase(ctx context.Context, repoPath string) error {
-	log := logger.Get()
-	start := time.Now()
-	log.Debug("git pull --rebase starting", "repoPath", repoPath)
-
-	cmd := c.commandInRepo(ctx, repoPath, "pull", "--rebase", "--quiet")
-
-	output, err := cmd.CombinedOutput()
-	log.Debug("git pull --rebase completed", "duration", time.Since(start), "error", err)
-
-	if err != nil {
-		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
-	}
-
-	return nil
-}
-
-// Push pushes changes to the remote repository
+// Push pushes the current branch to origin.
 func (c *Client) Push(ctx context.Context, repoPath string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "push", "--quiet")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	remoteURL := c.remoteLocation(repo)
+	auth, err := c.resolveAuth(remoteURL)
+	if err != nil {
+		return err
+	}
+	err = repo.PushContext(ctx, &git.PushOptions{RemoteName: "origin", Auth: auth})
+	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	return classifyRemoteError(remoteURL, err.Error(), err)
+}
 
+// PushSetUpstream pushes a branch and sets its upstream tracking ref. Used
+// for the first push to an empty repo and for the (uniquely named,
+// never-preexisting) PR branch — neither needs --force, so this pushes
+// plainly and must stay that way; force-pushing here would let a caller
+// silently clobber a remote branch that already exists.
+func (c *Client) PushSetUpstream(ctx context.Context, repoPath, branch string) error {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	remoteURL := c.remoteLocation(repo)
+	auth, err := c.resolveAuth(remoteURL)
+	if err != nil {
+		return err
+	}
+	refSpec := config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch))
+	err = repo.PushContext(ctx, &git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{refSpec},
+		Auth:       auth,
+	})
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return classifyRemoteError(remoteURL, err.Error(), err)
+	}
+	// Set the local tracking branch's upstream, matching `push -u`.
+	branchRef := plumbing.NewBranchReferenceName(branch)
+	if cfg, cerr := repo.Config(); cerr == nil {
+		if cfg.Branches == nil {
+			cfg.Branches = make(map[string]*config.Branch)
+		}
+		cfg.Branches[branch] = &config.Branch{
+			Name:   branch,
+			Remote: "origin",
+			Merge:  branchRef,
+		}
+		_ = repo.SetConfig(cfg)
+	}
 	return nil
 }
 
-// PushSetUpstream pushes a branch and sets its upstream tracking ref. Used for
-// the first push to an empty repo and for the (uniquely named, never-preexisting)
-// PR branch — neither needs --force, so this is a plain non-forcing push and must
-// stay that way; force-pushing here would let a caller silently clobber a remote
-// branch that already exists.
-func (c *Client) PushSetUpstream(ctx context.Context, repoPath, branch string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "push", "--quiet", "-u", "origin", branch)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
+// checkoutTarget resolves ref (a branch name, tag, or commit hash) to
+// CheckoutOptions — a branch reference when one exists locally or as a
+// remote-tracking ref, otherwise a detached commit checkout.
+//
+// "HEAD" is special-cased to stay on the current branch: resolving it like
+// any other ref would find the commit HEAD currently points to and check
+// that out by hash, which detaches HEAD — turning "refresh the worktree to
+// match HEAD" into "stop being on a branch at all". Every other ref name
+// keeps its literal meaning.
+func checkoutTarget(repo *git.Repository, ref string) (*git.CheckoutOptions, error) {
+	if ref == "HEAD" {
+		head, err := repo.Head()
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve HEAD: %w", err)
+		}
+		if head.Name().IsBranch() {
+			return &git.CheckoutOptions{Branch: head.Name()}, nil
+		}
+		return &git.CheckoutOptions{Hash: head.Hash()}, nil
 	}
-
-	return nil
+	branchRef := plumbing.NewBranchReferenceName(ref)
+	if _, err := repo.Reference(branchRef, false); err == nil {
+		return &git.CheckoutOptions{Branch: branchRef}, nil
+	}
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve %s: %w", ref, err)
+	}
+	return &git.CheckoutOptions{Hash: *hash}, nil
 }
 
 // Checkout checks out a specific ref (branch, tag, or commit)
 func (c *Client) Checkout(ctx context.Context, repoPath, ref string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "checkout", "--quiet", ref)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git checkout failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	opts, err := checkoutTarget(repo, ref)
+	if err != nil {
+		return fmt.Errorf("git checkout failed: %w", err)
+	}
+	if err := wt.Checkout(opts); err != nil {
+		return fmt.Errorf("git checkout failed: %w", err)
+	}
 	return nil
 }
 
@@ -357,14 +479,49 @@ func (c *Client) Checkout(ctx context.Context, repoPath, ref string) error {
 // working tree (an interrupted delete) would otherwise never heal — and
 // no local edit in these caches is worth preserving.
 func (c *Client) ForceCheckout(ctx context.Context, repoPath, ref string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "checkout", "--quiet", "--force", ref)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git checkout --force failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	opts, err := checkoutTarget(repo, ref)
+	if err != nil {
+		return fmt.Errorf("git checkout --force failed: %w", err)
+	}
+	opts.Force = true
+	if err := wt.Checkout(opts); err != nil {
+		return fmt.Errorf("git checkout --force failed: %w", err)
+	}
 	return nil
+}
+
+// HasDeletedWorktreeFiles reports whether any tracked file is missing from
+// the working tree — the signature of an interrupted delete, whatever the
+// repository's layout. Modified or untracked files do not count, so
+// pending local changes (queued usage appends, say) never trigger a
+// destructive restore.
+func (c *Client) HasDeletedWorktreeFiles(ctx context.Context, repoPath string) (bool, error) {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open repository: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree: %w", err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return false, fmt.Errorf("git ls-files --deleted failed: %w", err)
+	}
+	for _, s := range status {
+		if s.Worktree == git.Deleted {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // LsRemote queries a remote repository for a specific ref
@@ -375,162 +532,147 @@ func (c *Client) LsRemote(ctx context.Context, repoURL, ref string) (string, err
 		return ref, nil
 	}
 
-	cmd, _, err := c.commandWithURL(ctx, repoURL, "ls-remote")
+	url, err := c.resolveURL(repoURL)
+	if err != nil {
+		return "", err
+	}
+	auth, err := c.resolveAuth(repoURL)
 	if err != nil {
 		return "", err
 	}
 
-	// Append ref
-	cmd.Args = append(cmd.Args, ref)
-
-	output, err := cmd.Output()
+	remote := git.NewRemote(nil, &config.RemoteConfig{Name: "origin", URLs: []string{url}})
+	refs, err := remote.ListContext(ctx, &git.ListOptions{Auth: auth})
 	if err != nil {
-		var stderr string
-		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-			stderr = string(exitErr.Stderr)
+		return "", classifyRemoteError(repoURL, err.Error(), err)
+	}
+
+	for _, want := range []plumbing.ReferenceName{
+		plumbing.NewBranchReferenceName(ref),
+		plumbing.NewTagReferenceName(ref),
+		plumbing.ReferenceName(ref),
+	} {
+		for _, r := range refs {
+			if r.Name() == want {
+				return r.Hash().String(), nil
+			}
 		}
-		return "", classifyRemoteError(repoURL, stderr, err)
 	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 || lines[0] == "" {
-		return "", fmt.Errorf("ref not found: %s", ref)
-	}
-
-	// Parse the output: <commit-hash>\t<ref-name>
-	parts := strings.Fields(lines[0])
-	if len(parts) < 1 {
-		return "", errors.New("invalid git ls-remote output")
-	}
-
-	return parts[0], nil
+	return "", fmt.Errorf("ref not found: %s", ref)
 }
 
 // RevParse resolves a ref to a commit hash in a local repository
 func (c *Client) RevParse(ctx context.Context, repoPath, ref string) (string, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "rev-parse", ref)
-
-	output, err := cmd.Output()
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open repository: %w", err)
+	}
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse failed: %w", err)
 	}
-
-	return strings.TrimSpace(string(output)), nil
+	return hash.String(), nil
 }
 
 // HasCommit reports whether the commit exists in the local repository,
-// without touching the network. The repository is addressed by explicit
-// --git-dir so git's upward repository discovery can never answer about
-// an ancestor of repoPath.
-//
-// repoPath must be an absolute path to a non-bare clone (a directory
-// with .git directly inside it) — the layout sx's own clones always
-// have. A bare repository or relative path reports false.
+// without touching the network.
 func (c *Client) HasCommit(ctx context.Context, repoPath, sha string) bool {
-	cmd := c.command(ctx, "--git-dir", filepath.Join(repoPath, ".git"), "cat-file", "-e", sha+"^{commit}")
-	return cmd.Run() == nil
-}
-
-// HasDeletedWorktreeFiles reports whether any tracked file is missing
-// from the working tree (git ls-files --deleted) — the signature of an
-// interrupted delete, whatever the repository's layout. Modified or
-// untracked files do not count, so pending local changes (queued usage
-// appends, say) never trigger a destructive restore.
-func (c *Client) HasDeletedWorktreeFiles(ctx context.Context, repoPath string) (bool, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "ls-files", "--deleted")
-	out, err := cmd.Output()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return false, fmt.Errorf("git ls-files --deleted failed: %w", err)
+		return false
 	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
+	_, err = repo.CommitObject(plumbing.NewHash(sha))
+	return err == nil
 }
 
-// IsRepo reports whether repoPath is a usable git repository.
-// --resolve-git-dir checks that exact path — no upward discovery, so an
+// IsRepo reports whether repoPath is a usable git repository. PlainOpen
+// requires .git directly inside repoPath — no upward discovery — so an
 // ancestor repository (a cache dir under a dotfiles-managed $HOME, say)
 // cannot make a corrupt cache look healthy.
-//
-// repoPath must be an absolute path to a non-bare clone (a directory
-// with .git directly inside it) — the layout sx's own clones always
-// have. A bare repository reports false, and callers treat false as
-// license to discard the directory — which is why false is returned
-// only when git itself answered: a git that could not run at all (fork
-// failure, missing binary mid-upgrade) must never read as "corrupt,
-// delete it".
 func (c *Client) IsRepo(ctx context.Context, repoPath string) bool {
-	err := c.command(ctx, "rev-parse", "--resolve-git-dir", filepath.Join(repoPath, ".git")).Run()
-	if err == nil {
-		return true
-	}
-	var exitErr *exec.ExitError
-	return !errors.As(err, &exitErr)
+	_, err := git.PlainOpen(repoPath)
+	return err == nil
 }
 
 // GetRemoteURL returns the remote URL for the repository (typically 'origin')
 func (c *Client) GetRemoteURL(ctx context.Context, repoPath string) (string, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "remote", "get-url", "origin")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git remote get-url failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	remoteURL := strings.TrimSpace(string(output))
-	return remoteURL, nil
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return "", fmt.Errorf("git remote get-url failed: %w", err)
+	}
+	urls := remote.Config().URLs
+	if len(urls) == 0 {
+		return "", errors.New("origin remote has no URL configured")
+	}
+	return urls[0], nil
 }
 
 // GetCurrentBranch returns the current branch name
 func (c *Client) GetCurrentBranch(ctx context.Context, repoPath string) (string, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	branch := strings.TrimSpace(string(output))
-	return branch, nil
+	head, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w", err)
+	}
+	return head.Name().Short(), nil
 }
 
-// GetCurrentBranchSymbolic returns the current branch name using symbolic-ref,
-// which works even on empty repos (no commits yet).
+// GetCurrentBranchSymbolic returns the current branch name by reading HEAD's
+// symbolic target directly, which works even on empty repos (no commits
+// yet) — repo.Head() requires HEAD to resolve to a commit and fails there.
 func (c *Client) GetCurrentBranchSymbolic(ctx context.Context, repoPath string) (string, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "symbolic-ref", "--short", "HEAD")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git symbolic-ref failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	return strings.TrimSpace(string(output)), nil
+	ref, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return "", fmt.Errorf("git symbolic-ref failed: %w", err)
+	}
+	return ref.Target().Short(), nil
 }
 
-// GetDefaultBranch returns the remote's default branch (e.g. "main") by reading
-// the origin/HEAD symbolic ref that `git clone` records. Use this instead of the
-// clone's current HEAD when you need the repo's real base branch: the cached
-// clone is long-lived and may be left checked out on some other branch.
+// GetDefaultBranch returns the remote's default branch (e.g. "main") by
+// reading the origin/HEAD symbolic ref that a clone records. Use this
+// instead of the clone's current HEAD when you need the repo's real base
+// branch: the cached clone is long-lived and may be left checked out on
+// some other branch.
 func (c *Client) GetDefaultBranch(ctx context.Context, repoPath string) (string, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git symbolic-ref refs/remotes/origin/HEAD failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
-
-	// "origin/main" -> "main"
-	ref := strings.TrimSpace(string(output))
-	return strings.TrimPrefix(ref, "origin/"), nil
+	ref, err := repo.Reference(plumbing.ReferenceName("refs/remotes/origin/HEAD"), false)
+	if err != nil {
+		return "", fmt.Errorf("git symbolic-ref refs/remotes/origin/HEAD failed: %w", err)
+	}
+	return strings.TrimPrefix(ref.Target().Short(), "origin/"), nil
 }
 
 // CheckoutNewBranch creates and switches to a new branch
 func (c *Client) CheckoutNewBranch(ctx context.Context, repoPath, branch string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "checkout", "-b", branch)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git checkout -b failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	branchRef := plumbing.NewBranchReferenceName(branch)
+	if _, err := repo.Reference(branchRef, false); err == nil {
+		return fmt.Errorf("git checkout -b failed: branch %s already exists", branch)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: branchRef, Create: true}); err != nil {
+		return fmt.Errorf("git checkout -b failed: %w", err)
+	}
 	return nil
 }
 
@@ -540,125 +682,173 @@ func (c *Client) CheckoutNewBranch(ctx context.Context, repoPath, branch string)
 // vault clone, which is reused across runs and may carry a leftover branch from
 // a previous attempt.
 func (c *Client) CheckoutNewBranchForce(ctx context.Context, repoPath, branch string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "checkout", "-B", branch)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git checkout -B failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	branchRef := plumbing.NewBranchReferenceName(branch)
+	head, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("git checkout -B failed: %w", err)
+	}
+	// Move (or create) the branch ref to HEAD first — Checkout with
+	// Create:true refuses an existing ref, and without Create it would
+	// leave a pre-existing branch wherever it last pointed.
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef, head.Hash())); err != nil {
+		return fmt.Errorf("git checkout -B failed: %w", err)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: branchRef, Force: true}); err != nil {
+		return fmt.Errorf("git checkout -B failed: %w", err)
+	}
 	return nil
 }
 
-// Add stages files for commit
+// Add stages files for commit. A single "." stages everything, matching
+// `git add .`; go-git's Worktree.Add expects individual paths, so that case
+// goes through AddWithOptions{All: true} instead.
 func (c *Client) Add(ctx context.Context, repoPath string, paths ...string) error {
-	args := append([]string{"add"}, paths...)
-	cmd := c.commandInRepo(ctx, repoPath, args...)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git add failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	if len(paths) == 1 && paths[0] == "." {
+		if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+			return fmt.Errorf("git add failed: %w", err)
+		}
+		return nil
+	}
+	for _, p := range paths {
+		if _, err := wt.Add(p); err != nil {
+			return fmt.Errorf("git add failed: %w", err)
+		}
+	}
 	return nil
+}
+
+// commitSignature resolves the author/committer identity: the client's
+// configured actor (WithCommitActor), falling back to the git global
+// config's user.name/user.email the same way the git CLI would.
+func (c *Client) commitSignature() (*object.Signature, error) {
+	name, email := c.authorName, c.authorEmail
+	if name == "" || email == "" {
+		if cfg, err := config.LoadConfig(config.GlobalScope); err == nil {
+			if name == "" {
+				name = cfg.User.Name
+			}
+			if email == "" {
+				email = cfg.User.Email
+			}
+		}
+	}
+	if name == "" || email == "" {
+		return nil, errors.New("no commit identity configured: set a name/email (WithCommitActor) or git's global user.name/user.email")
+	}
+	return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
 }
 
 // Commit creates a commit with the given message
 func (c *Client) Commit(ctx context.Context, repoPath, message string) error {
-	cmd := c.commandInRepo(ctx, repoPath, "commit", "-m", message)
-
-	output, err := cmd.CombinedOutput()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("git commit failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	sig, err := c.commitSignature()
+	if err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+	if _, err := wt.Commit(message, &git.CommitOptions{Author: sig}); err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
 	return nil
 }
 
 // IsEmpty checks if a repository has no commits (e.g., freshly cloned empty repo)
 func (c *Client) IsEmpty(ctx context.Context, repoPath string) (bool, error) {
-	// "not a git repository" also exits 128, and a broken repository
-	// must not masquerade as an empty one — callers skip work for empty
-	// repos that they must instead repair for broken ones.
-	if !c.IsRepo(ctx, repoPath) {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
 		return false, fmt.Errorf("not a git repository: %s", repoPath)
 	}
-
-	cmd := c.commandInRepo(ctx, repoPath, "rev-parse", "HEAD")
-
-	err := cmd.Run()
-	if err != nil {
-		// Exit code 128 means no commits (expected for empty repos)
-		exitError := &exec.ExitError{}
-		if errors.As(err, &exitError) && exitError.ExitCode() == 128 {
-			return true, nil
-		}
-		return false, fmt.Errorf("git rev-parse HEAD failed: %w", err)
+	_, err = repo.Head()
+	if err == nil {
+		return false, nil
 	}
-	return false, nil
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return true, nil
+	}
+	return false, fmt.Errorf("git rev-parse HEAD failed: %w", err)
 }
 
 // HasStagedChanges checks if there are staged changes ready to be committed
 func (c *Client) HasStagedChanges(ctx context.Context, repoPath string) (bool, error) {
-	cmd := c.commandInRepo(ctx, repoPath, "diff", "--cached", "--quiet")
-
-	err := cmd.Run()
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		// Exit code 1 means there are changes
-		exitError := &exec.ExitError{}
-		if errors.As(err, &exitError) {
-			if exitError.ExitCode() == 1 {
-				return true, nil
-			}
-		}
+		return false, fmt.Errorf("failed to open repository: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree: %w", err)
+	}
+	status, err := wt.Status()
+	if err != nil {
 		return false, fmt.Errorf("git diff failed: %w", err)
 	}
-
-	// Exit code 0 means no changes
+	for _, s := range status {
+		if s.Staging != git.Unmodified {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 
 // remoteLocation returns the best human-readable identifier for a repo in
 // error messages: prefer the origin URL (what the user typed/cloned from),
-// fall back to the local path. Used by Fetch/Pull/Push so classified errors
+// fall back to a generic label. Used by Fetch/Pull/Push so classified errors
 // mention something the user recognizes, not a cache-dir hash.
-func (c *Client) remoteLocation(ctx context.Context, repoPath string) string {
-	cmd := c.commandInRepo(ctx, repoPath, "config", "--get", "remote.origin.url")
-	out, err := cmd.Output()
-	if err == nil {
-		if url := strings.TrimSpace(string(out)); url != "" {
-			return url
+func (c *Client) remoteLocation(repo *git.Repository) string {
+	if remote, err := repo.Remote("origin"); err == nil {
+		if urls := remote.Config().URLs; len(urls) > 0 {
+			return urls[0]
 		}
 	}
-	return repoPath
+	return "origin"
 }
 
-// classifyRemoteError turns raw git stderr/output into an actionable error.
-// It distinguishes "repo not found" from "auth required" so the caller can
-// show a useful next-step hint instead of dumping git's raw output.
+// classifyRemoteError turns a go-git error into an actionable one. It
+// distinguishes "repo not found" from "auth required" so the caller can show
+// a useful next-step hint instead of dumping a raw error.
 func classifyRemoteError(repoURL, output string, err error) error {
 	authHint := "To authenticate:\n" +
-		"  - For private repos over HTTPS: configure a git credential helper\n" +
-		"    (e.g. `gh auth setup-git` for GitHub, or `git config --global credential.helper store`)\n" +
+		"  - For private repos over HTTPS: pass a token via WithHTTPBasicAuth\n" +
 		"  - Or use an SSH URL like git@github.com:owner/repo.git\n" +
-		"    with your SSH agent running, or pass --ssh-key /path/to/key"
+		"    with --ssh-key /path/to/key"
 
 	lc := strings.ToLower(output)
 	switch {
-	case strings.Contains(lc, "terminal prompts disabled"),
-		strings.Contains(lc, "could not read username"),
-		strings.Contains(lc, "could not read password"),
-		strings.Contains(lc, "authentication failed"),
+	case strings.Contains(lc, "authentication required"),
+		strings.Contains(lc, "authorization failed"),
+		strings.Contains(lc, "invalid credentials"),
 		strings.Contains(lc, "permission denied (publickey)"):
 		return fmt.Errorf("authentication required for %s\nThe repository may be private, or you may not have access.\n%s", repoURL, authHint)
 	case strings.Contains(lc, "repository not found"),
-		strings.Contains(lc, "does not appear to be a git repository"),
-		strings.Contains(lc, "remote: not found"):
+		strings.Contains(lc, "not found"):
 		return fmt.Errorf("repository not found: %s\nCheck the URL is correct. If it's a private repo, this can also mean you lack access:\n%s", repoURL, authHint)
-	case strings.Contains(lc, "could not resolve host"),
+	case strings.Contains(lc, "no such host"),
 		strings.Contains(lc, "network is unreachable"),
 		strings.Contains(lc, "connection refused"),
-		strings.Contains(lc, "connection timed out"):
+		strings.Contains(lc, "connection timed out"),
+		strings.Contains(lc, "i/o timeout"):
 		return fmt.Errorf("network error reaching %s: %s", repoURL, strings.TrimSpace(output))
 	}
 	if output == "" {

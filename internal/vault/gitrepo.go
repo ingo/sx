@@ -495,9 +495,24 @@ func (g *GitVault) clone(ctx context.Context) error {
 	return g.gitClient.Clone(ctx, g.repoURL, g.repoPath)
 }
 
-// pull pulls updates from the remote repository
+// pull pulls updates from the remote repository. go-git's Pull only
+// fast-forwards — a genuinely diverged history (the one case
+// RecordUsageEvents can legitimately produce: a locally queued,
+// not-yet-pushed usage commit while the remote has also advanced) fails
+// outright instead of merging, since go-git has no 3-way merge and no
+// equivalent of the union merge driver .sx/usage/*.jsonl relies on. That
+// specific divergence is reconciled by hand; anything else diverging
+// locally is an unexpected state the caller's own repair/reclone paths
+// are meant to handle, not this one.
 func (g *GitVault) pull(ctx context.Context) error {
-	return g.gitClient.Pull(ctx, g.repoPath)
+	err := g.gitClient.Pull(ctx, g.repoPath)
+	if err == nil {
+		return nil
+	}
+	if !git.IsNonFastForwardError(err) {
+		return err
+	}
+	return g.reconcileDivergedUsage(ctx)
 }
 
 // UpdateTemplates updates templates in the repository if needed and returns the list of updated files
